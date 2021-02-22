@@ -29,7 +29,8 @@ enum class fun_type {
   Publication_enqueueMessage,
 
   SubscriptionQueue_push,
-  SubscriptionQueue_call,
+  SubscriptionQueue_call_before_callback,
+  SubscriptionQueue_call_after_callback,
 };
 
 struct _data {
@@ -211,13 +212,26 @@ extern "C"  CallbackInterface::CallResult _ZN3ros17SubscriptionQueue4callEv(void
       data.ns = std::chrono::duration_cast<chrono::nanoseconds>(now).count();
       data.pid = getpid();
       data.tid = syscall(SYS_gettid);
-      data.type = fun_type::SubscriptionQueue_call;
+      data.type = fun_type::SubscriptionQueue_call_before_callback;
       data.seq1 = *(uint32_t*)msg.get();
       data.seq2 = 0;
 
       queue.push(data);
     }
     i.helper->call(params);
+    // Measurement
+    {
+      struct _data data = {};
+      auto now = chrono::system_clock::now().time_since_epoch();
+      data.ns = std::chrono::duration_cast<chrono::nanoseconds>(now).count();
+      data.pid = getpid();
+      data.tid = syscall(SYS_gettid);
+      data.type = fun_type::SubscriptionQueue_call_after_callback;
+      data.seq1 = *(uint32_t*)msg.get();
+      data.seq2 = 0;
+
+      queue.push(data);
+    }
   }
 
   return ros::CallbackInterface::Success;
@@ -230,6 +244,12 @@ extern "C" void _ZN3ros17SubscriptionQueue4pushERKN5boost10shared_ptrINS_26Subsc
                      bool nonconst_need_copy, ros::Time receipt_time, bool* was_full)
 {
   auto s = reinterpret_cast<SubscriptionQueue*>(p);
+
+  static pid_t pid = 0, tid = 0;
+  if (pid == 0) {
+    pid = getpid();
+    tid = syscall(SYS_gettid);
+  }
 
   boost::mutex::scoped_lock lock(s->queue_mutex_);
 
