@@ -9,11 +9,17 @@ run:
 	source ./devel/setup.sh
 	roslaunch ros_sample0 ros_sample0.launch
 
-run_w_lhook: lhook.so
+run0_w_lhook: lhook.so
 	source /opt/ros/noetic/setup.sh
 	source ./devel/setup.sh
 	mkdir -p ~/.ros/pl_dir
 	LD_PRELOAD=$(C_DIR)/lhook.so roslaunch ros_sample0 ros_sample0.launch
+
+run1_w_lhook: lhook.so
+	source /opt/ros/noetic/setup.sh
+	source ./devel/setup.sh
+	mkdir -p ~/.ros/pl_dir
+	LD_PRELOAD=$(C_DIR)/lhook.so roslaunch ros_sample1 ros_sample1.launch
 
 clean_pl_data:
 	rm ~/.ros/pl_dir/log*
