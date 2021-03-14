@@ -66,6 +66,10 @@ enum class fun_type {
   bind,
 };
 
+boost::mutex subscription_queue_push_mutex;
+
+uint32_t push_seq_table[0x1000];
+
 struct _data {
   fun_type type;
   pid_t pid;
@@ -73,6 +77,7 @@ struct _data {
   uint64_t ns;
   uint32_t seq1;
   uint32_t seq2;
+  const char* name = "none";
 };
 
 thread th;
@@ -96,7 +101,8 @@ void Logger(const std::string& name) {
     while (data_queue.pop(data)) {
       logfile << static_cast<int>(data.type) << " " 
         << data.ns << " " << data.pid << " " 
-        << data.tid << " " << data.seq1 << " " << data.seq2 << "\n";
+        << data.tid << " " << data.seq1 << " " 
+        << data.seq2 << " " << data.name << "\n";
     }
     logfile.flush();
 
@@ -325,10 +331,15 @@ extern "C"  CallbackInterface::CallResult _ZN3ros17SubscriptionQueue4callEv(void
       data.pid = pid;
       data.tid = tid;
       data.type = fun_type::SubscriptionQueue_call_before_callback;
+
       data.seq1 = *(uint32_t*)msg.get();
-      data.seq2 = 0;
+      *(uint32_t*)msg.get() = push_seq_table[data.seq1 % 0x1000];
+
+      data.seq2 = push_seq_table[data.seq1 % 0x1000];
+      data.name = i.helper->getTypeInfo().name();
 
       data_queue.push(data);
+
     }
     i.helper->call(params);
     // Measurement
@@ -357,10 +368,13 @@ extern "C" void _ZN3ros17SubscriptionQueue4pushERKN5boost10shared_ptrINS_26Subsc
 {
   auto s = reinterpret_cast<SubscriptionQueue*>(p);
 
-  static pid_t pid = 0, tid = 0;
-  if (pid == 0) {
-    pid = getpid();
-    tid = syscall(SYS_gettid);
+  static uint32_t seq_push = 0;
+  static struct _data data = {};
+  static bool initialized = false;
+  if (!initialized) {
+    data.type = fun_type::SubscriptionQueue_push;
+    data.pid = getpid();
+    data.tid = syscall(SYS_gettid);
   }
 
   boost::mutex::scoped_lock lock(s->queue_mutex_);
@@ -404,18 +418,22 @@ extern "C" void _ZN3ros17SubscriptionQueue4pushERKN5boost10shared_ptrINS_26Subsc
 
   // Measurement
   {
-    struct _data data = {};
     auto now = chrono::system_clock::now().time_since_epoch();
     VoidConstPtr msg = deserializer->deserialize();
 
-    data.ns = std::chrono::duration_cast<chrono::nanoseconds>(now).count();
-    data.pid = pid;
-    data.tid = tid;
-    data.type = fun_type::SubscriptionQueue_push;
-    data.seq1 = *(uint32_t*)msg.get();
-    data.seq2 = *(uint32_t*)msg.get();
+    {
+      boost::mutex::scoped_lock push_lock(subscription_queue_push_mutex);
+      data.seq2 = seq_push;
+      seq_push++;
+    }
 
+    data.ns = std::chrono::duration_cast<chrono::nanoseconds>(now).count();
+    data.seq1 = *(uint32_t*)msg.get();
+
+    *(uint32_t*)msg.get() = data.seq2;
     data_queue.push(data);
+
+    push_seq_table[data.seq2 % 0x1000] = data.seq1;
   }
 }
 /*
@@ -621,7 +639,7 @@ extern "C" int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
   int res = ((accept_type)orig)(sockfd, addr, addrlen);
 
   {
-    cout << "accept :" << sockfd << " " <<  ntohs(((sockaddr_in*)addr)->sin_port) << " " << data.pid <<endl;
+    // cout << "accept :" << sockfd << " " <<  ntohs(((sockaddr_in*)addr)->sin_port) << " " << data.pid <<endl;
     data.seq1 = ntohs(((sockaddr_in*)addr)->sin_port);
     data.seq2 = sockfd;
     data_queue.push(data);
@@ -647,7 +665,7 @@ extern "C" int connect(int sockfd, const struct sockaddr *addr, socklen_t addrle
 
   int res = ((connect_type)orig)(sockfd, addr, addrlen);
   {
-    cout << "connect :" << sockfd << " " << ntohs(((sockaddr_in*)addr)->sin_port) << " " << data.pid <<endl;
+    // cout << "connect :" << sockfd << " " << ntohs(((sockaddr_in*)addr)->sin_port) << " " << data.pid <<endl;
     data.seq1 = ntohs(((sockaddr_in*)addr)->sin_port);
     data.seq2 = sockfd;
     data_queue.push(data);
@@ -679,7 +697,7 @@ extern "C" int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) 
   getsockname(sockfd, (sockaddr*)&addr_, &addrlen_);
 
   {
-    cout << "bind :" << sockfd << " " << ntohs(addr_.sin_port) << " " << data.pid <<endl;
+    // cout << "bind :" << sockfd << " " << ntohs(addr_.sin_port) << " " << data.pid <<endl;
     data.seq1 = ntohs(addr_.sin_port);
     data.seq2 = sockfd;
     data_queue.push(data);
