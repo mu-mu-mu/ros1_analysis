@@ -1,8 +1,11 @@
 SHELL=/bin/bash
 C_DIR=$(shell pwd)
 
-lhook.so: hook_libroscpp.cpp
+lhook.so: hook_libroscpp.cpp demangler
 	g++ -g -Wall -shared -fPIC -pthread -ldl -I/opt/ros/noetic/include -I$(C_DIR)/devel/include hook_libroscpp.cpp -o lhook.so
+
+demangler: demangler.cpp
+	g++ -o demangler demangler.cpp
 
 run:
 	source /opt/ros/noetic/setup.sh
