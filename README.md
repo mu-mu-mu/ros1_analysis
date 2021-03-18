@@ -16,3 +16,8 @@ moinitor_pub_queue: pub_queueのトレース
 
 ## hook
 1. make run_w_lhook
+
+# Data
+python3 calc_e2e.py intra autoware_data_01/log_remote_cmd_converter_10041
+python3 calc_e2e.py inter autoware_data_01/log_multi_object_tracker_9853 autoware_data_01/log_map_based_prediction_9873
+
