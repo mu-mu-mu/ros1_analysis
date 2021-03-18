@@ -107,11 +107,31 @@ def collect(name):
                 print("Error")
     return node
 
-def calc_e2e(node1,node2):
+def calc_e2e_intra(node):
     lat = dict()
-    t1 = []
-    t2 = []
-    t3 = []
+
+    for seq, t in node["SubscriptionQueue_push"].items():
+        time1 = t["time"]
+        seq_p = t["seq"]
+
+        try:
+            time2 = node["SubscriptionQueue_call_before_callback"][seq_p]["time"]
+            name  = node["SubscriptionQueue_call_before_callback"][seq_p]["name"]
+        except:
+            continue
+
+        if seq in node["TransportTCP_read"].keys():
+            continue
+
+        if not name in lat.keys():
+            lat[name] = dict()
+            lat[name]["sub queue"] = list()
+
+        lat[name]["sub queue"].append(time2 - time1)
+    return lat
+
+def calc_e2e_inter(node1,node2):
+    lat = dict()
 
     for seq, t in node1["Publication_publish"].items():
         time1 = t["time"]
@@ -173,9 +193,16 @@ if args[1] == "inter":
     n1 = collect(n1_name)
     n2 = collect(n2_name)
 
-    lat = calc_e2e(n1,n2)
+    lat = calc_e2e_inter(n1,n2)
 
-    for node_name, node_time in lat.items():
+    fig = plt.figure()
+
+    node_num = len(lat)
+    if node_num == 0:
+        print("None")
+        sys.exit(0)
+
+    for i,(node_name, node_time) in enumerate(lat.items(), start=0):
         assert reduce(lambda x,y: x if len(x) == len(y) else False, node_time.values())
         try:
             demangler_out = subprocess.run(["./demangler", node_name], capture_output=True)
@@ -187,14 +214,50 @@ if args[1] == "inter":
         print(node_name)
         print("num: ", len(list(node_time.values())[0]))
 
-        for lat_name, time in node_time.items():
-            plt.hist(time, bins =50, histtype = 'bar', label = lat_name)
+        for j,(lat_name, time)  in enumerate(node_time.items(), start=1):
+            ax = fig.add_subplot(node_num, 3, 3*i+j )
+            ax.hist(time, bins =50, histtype = 'bar', label = lat_name)
+            ax.legend(loc="best")
 
-        plt.legend(loc="best")
-        plt.show()
+    plt.show()
 
 elif args[1] == "intra":
-    print("Not supported yet, sorry...")
+    if len(args) == 3:
+        n_name = args[2]
+    else:
+        print("calc_e2e.py intra /path/to/src_node")
+        sys.exit(1)
+
+    n = collect(n_name)
+
+    lat = calc_e2e_intra(n)
+
+    fig = plt.figure()
+
+    node_num = len(lat)
+
+    if node_num == 0:
+        print("None")
+        sys.exit(0)
+
+    for i,(node_name, node_time) in enumerate(lat.items(), start=0):
+        assert reduce(lambda x,y: x if len(x) == len(y) else False, node_time.values())
+        try:
+            demangler_out = subprocess.run(["./demangler", node_name], capture_output=True)
+            node_name = demangler_out.stdout.decode('utf-8')
+        except:
+            print("error: demangler")
+
+        print()
+        print(node_name)
+        print("num: ", len(list(node_time.values())[0]))
+
+        for j,(lat_name, time)  in enumerate(node_time.items(), start=1):
+            ax = fig.add_subplot(node_num, 1, i+j )
+            ax.hist(time, bins =50, histtype = 'bar', label = lat_name)
+            ax.legend(loc="best")
+
+    plt.show()
 
 else:
     print("inter or intra")
