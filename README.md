@@ -21,3 +21,9 @@ moinitor_pub_queue: pub_queueのトレース
 python3 calc_e2e.py intra autoware_data_01/log_remote_cmd_converter_10041
 python3 calc_e2e.py inter autoware_data_01/log_multi_object_tracker_9853 autoware_data_01/log_map_based_prediction_9873
 
+# Lisence
+This software is released under the Apache License, Version 2.0. See LICENSE. 
+qlat_text.py: This file includes the modified code of iovisor/bcc
+which is released under Apache License 2.0. 
+hook_libroscpp.cpp: This file includes the modified code of ROS(ros_comm)
+which is released under BSD License.
