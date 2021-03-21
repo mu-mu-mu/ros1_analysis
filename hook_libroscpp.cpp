@@ -26,11 +26,15 @@
 #include "ros/poll_set.h"
 #include "ros/header.h"
 
+// Dirty trick!
 #define private public
 #include "ros/transport/transport_tcp.h"
 #undef private
 
-// Dirty trick!
+#define private public
+#include "ros/topic_manager.h"
+#undef private
+
 #define private public
 #include "ros/publisher.h"
 #undef private
@@ -38,7 +42,7 @@
 #include "ros/ros.h"
 #include "ros/callback_queue.h"
 #include "ros/message_deserializer.h"
-#include "ros/topic_manager.h"
+#include "ros/publication.h"
 
 // Dirty trick!
 #define private public
@@ -170,7 +174,7 @@ extern "C" bool _ZN3ros11Publication7publishERNS_17SerializedMessageE(void *p, v
   if (orig == NULL) {
     orig = dlsym(RTLD_NEXT, "_ZN3ros11Publication7publishERNS_17SerializedMessageE");
   }
-  static uint32_t seq2 = 0;
+  static uint32_t seq = 0;
 
   static pid_t pid = 0, tid = 0;
   if (pid == 0) {
@@ -179,19 +183,21 @@ extern "C" bool _ZN3ros11Publication7publishERNS_17SerializedMessageE(void *p, v
   }
 
   auto m = reinterpret_cast<ros::SerializedMessage*>(q);
-  auto now = chrono::system_clock::now().time_since_epoch();
-  bool res = ((publish_type)orig)(p,q);
-
-  *(uint32_t*)m->message_start = seq2;
 
   struct _data data = {};
+  data.type = fun_type::Publication_publish;
+  data.seq1 = *(uint32_t*)m->message_start;
+
+  *(uint32_t*)m->message_start = seq++;
+
+  bool res = ((publish_type)orig)(p,q);
+
+  auto now = chrono::system_clock::now().time_since_epoch();
   data.ns = std::chrono::duration_cast<chrono::nanoseconds>(now).count();
   data.pid = pid;
   data.tid = tid;
-  data.type = fun_type::Publication_publish;
-  data.seq1 = 0;
-  data.seq2 = seq2++;
-
+  data.seq1 = *(uint32_t*)m->message_start;
+  data.seq2 = *(uint32_t*)m->message_start;
   data_queue.push(data);
 
   return res;
@@ -209,6 +215,7 @@ extern "C" void _ZNK3ros9Publisher7publishERKN5boost8functionIFNS_17SerializedMe
   if (!initialized) {
     data.pid = getpid();
     data.tid = syscall(SYS_gettid);
+    data.type = fun_type::Publisher_publish;
     initialized = true;
   }
 
@@ -230,28 +237,23 @@ extern "C" void _ZNK3ros9Publisher7publishERKN5boost8functionIFNS_17SerializedMe
     return;
   }
 
-  // SerializedMessage m2m = serfunc();
-  // *(uint32_t*)m2m.message_start = 1234;
-  // cout << (void*)m2m.message_start << " "  << data.tid << endl;
-  // cout << *(uint32_t*)m2m.message_start << " "  << data.tid << endl;
+  // Inserted
+  PublicationPtr pp = _ZN3ros12TopicManager8instanceEv()->lookupPublicationWithoutLock(s->impl_->topic_);
+  if (pp->hasSubscribers() || pp->isLatching())
+  {
+    _ZN3ros12TopicManager8instanceEv()->publish(s->impl_->topic_, serfunc, m);
 
-  _ZN3ros12TopicManager8instanceEv()->publish(s->impl_->topic_, serfunc, m);
+    data.seq1 = *(uint32_t*)m.message_start;
+    data.seq2 = *(uint32_t*)m.message_start;
+    data_queue.push(data);
+  }
+  else {
+    _ZN3ros12TopicManager8instanceEv()->publish(s->impl_->topic_, serfunc, m);
+  }
 
   if (s->isLatched()) {
     boost::mutex::scoped_lock lock(s->impl_->last_message_mutex_);
     s->impl_->last_message_ = m;
-  }
-
-  // Inserted
-  {
-    SerializedMessage m2 = serfunc();
-    data.seq1 = *(uint32_t*)m2.message_start;
-    data.seq2 = *(uint32_t*)m2.message_start;
-    data.type = fun_type::Publisher_publish; // the time of receiving the message
-    data_queue.push(data);
-    
-    // cout << *(uint32_t*)m2.message_start << " "  << data.tid << endl;
-    // cout << (void*)m2.message_start << " "  << data.tid << endl;
   }
 }
 

@@ -45,6 +45,8 @@ def collect(name):
             seq1 = int(l[4])
             seq2 = int(l[5])
             time = int(l[1])
+            pid = int(l[2])
+            tid = int(l[3])
             name = l[6]
 
             if f_type == "Publisher_publish":
@@ -133,8 +135,13 @@ def calc_e2e_intra(node):
 def calc_e2e_inter(node1,node2):
     lat = dict()
 
-    for seq, t in node1["Publication_publish"].items():
-        time1 = t["time"]
+    for seq, t in node1["Publisher_publish"].items():
+        time0 = t["time"]
+
+        try:
+            time1 = node1["Publication_publish"][seq]["time"]
+        except:
+            continue
 
         try:
             time2 = node1["Publication_enqueueMessage"][seq]["time"] # time2-1: pub_queue
@@ -169,10 +176,21 @@ def calc_e2e_inter(node1,node2):
             lat[name]["pub queue"] = list()
             lat[name]["kernel"] = list()
             lat[name]["sub queue"] = list()
+            lat[name]["ROS"] = list()
+
+            #lat[name]["ROS1"] = list()
+            #lat[name]["ROS2"] = list()
+            #lat[name]["ROS3"] = list()
 
         lat[name]["pub queue"].append(time2 - time1)
         lat[name]["kernel"].append(time4 - time3)
         lat[name]["sub queue"].append(time6 - time5)
+        lat[name]["ROS"].append(time6 - time0 - (time6 - time5) - (time4 - time3) - (time2 - time1))
+
+        #lat[name]["ROS1"].append(time1 - time0)
+        #lat[name]["ROS2"].append(time3 - time2)
+        #lat[name]["ROS3"].append(time5 - time4)
+
     return lat
 
 args = sys.argv
@@ -215,7 +233,7 @@ if args[1] == "inter":
         print("num: ", len(list(node_time.values())[0]))
 
         for j,(lat_name, time)  in enumerate(node_time.items(), start=1):
-            ax = fig.add_subplot(node_num, 3, 3*i+j )
+            ax = fig.add_subplot(node_num, 4, 4*i+j )
             ax.hist(time, bins =50, histtype = 'bar', label = lat_name)
             ax.legend(loc="best")
 
