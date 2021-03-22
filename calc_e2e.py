@@ -4,7 +4,9 @@ from scipy.stats import norm
 from functools import reduce
 import sys  
 import subprocess
-
+import argparse
+import pandas as pd
+from statistics import mean, variance, stdev, median_grouped
 
 func_types =[
   "Publication_publish",
@@ -109,7 +111,7 @@ def collect(name):
                 print("Error")
     return node
 
-def calc_e2e_intra(node):
+def calc_e2e_intra(node,option):
     lat = dict()
 
     for seq, t in node["SubscriptionQueue_push"].items():
@@ -132,7 +134,7 @@ def calc_e2e_intra(node):
         lat[name]["sub queue"].append(time2 - time1)
     return lat
 
-def calc_e2e_inter(node1,node2):
+def calc_e2e_inter(node1,node2, option):
     lat = dict()
 
     for seq, t in node1["Publisher_publish"].items():
@@ -148,6 +150,11 @@ def calc_e2e_inter(node1,node2):
             seq_e = node1["Publication_enqueueMessage"][seq]["seq"] # time2-1: pub_queue
 
             time3 = node1["TransportTCP_write"][seq_e]["time"]
+        except:
+            continue
+
+        try:
+            node2["TransportTCP_read"][seq_e]
         except:
             continue
 
@@ -176,42 +183,31 @@ def calc_e2e_inter(node1,node2):
             lat[name]["pub queue"] = list()
             lat[name]["kernel"] = list()
             lat[name]["sub queue"] = list()
-            lat[name]["ROS"] = list()
 
-            #lat[name]["ROS1"] = list()
-            #lat[name]["ROS2"] = list()
-            #lat[name]["ROS3"] = list()
+            if not option.ros_detail:
+                lat[name]["ROS"] = list()
+            else:
+                lat[name]["ROS: app - pub queue"] = list()
+                lat[name]["ROS: pub queue - send"] = list()
+                lat[name]["ROS: recv - sub queue"] = list()
 
         lat[name]["pub queue"].append(time2 - time1)
         lat[name]["kernel"].append(time4 - time3)
         lat[name]["sub queue"].append(time6 - time5)
-        lat[name]["ROS"].append(time6 - time0 - (time6 - time5) - (time4 - time3) - (time2 - time1))
-
-        #lat[name]["ROS1"].append(time1 - time0)
-        #lat[name]["ROS2"].append(time3 - time2)
-        #lat[name]["ROS3"].append(time5 - time4)
+        if not option.ros_detail:
+            lat[name]["ROS"].append(time6 - time0 - (time6 - time5) - (time4 - time3) - (time2 - time1))
+        else:
+            lat[name]["ROS: app - pub queue"].append(time1 - time0)
+            lat[name]["ROS: pub queue - send"].append(time3 - time2)
+            lat[name]["ROS: recv - sub queue"].append(time5 - time4)
 
     return lat
 
-args = sys.argv
+def show_inter(args):
+    n1 = collect(args.src_node)
+    n2 = collect(args.dst_node)
 
-if args[1] == "inter":
-    if len(args) == 4:
-        n1_name = args[2]
-        n2_name = args[3]
-
-    elif len(args) == 5:
-        n1_name = args[2] + "/" + args[3]
-        n2_name = args[2] + "/" + args[4]
-    else:
-        print("calc_e2e.py inter /path/to/src_node /path/to/dst_node")
-        print("calc_e2e.py inter /path/to  src_node dst_node")
-        sys.exit(1)
-
-    n1 = collect(n1_name)
-    n2 = collect(n2_name)
-
-    lat = calc_e2e_inter(n1,n2)
+    lat = calc_e2e_inter(n1,n2, args)
 
     fig = plt.figure()
 
@@ -233,22 +229,16 @@ if args[1] == "inter":
         print("num: ", len(list(node_time.values())[0]))
 
         for j,(lat_name, time)  in enumerate(node_time.items(), start=1):
-            ax = fig.add_subplot(node_num, 4, 4*i+j )
-            ax.hist(time, bins =50, histtype = 'bar', label = lat_name)
+            ax = fig.add_subplot(node_num,1,1) #4, 4*i+j )
+            ax.hist(time, bins =50, histtype = 'bar', label = lat_name, range=(0,300000))
             ax.legend(loc="best")
 
     plt.show()
 
-elif args[1] == "intra":
-    if len(args) == 3:
-        n_name = args[2]
-    else:
-        print("calc_e2e.py intra /path/to/src_node")
-        sys.exit(1)
+def show_intra(args):
+    n = collect(args.node)
 
-    n = collect(n_name)
-
-    lat = calc_e2e_intra(n)
+    lat = calc_e2e_intra(n,args)
 
     fig = plt.figure()
 
@@ -277,5 +267,81 @@ elif args[1] == "intra":
 
     plt.show()
 
+def show_stack(args):
+    latencies = list()
+    lat_source = list()
+    index = list()
+
+    for nodes in args.nodes:
+        n1 = collect(nodes[0])
+        n2 = collect(nodes[1])
+
+        lat = calc_e2e_inter(n1,n2,args)
+
+        index.append(nodes[2])
+
+        node_num = len(lat)
+        if node_num != 1:
+            print("Error: the number of topic must be 1. ",nodes[2])
+            sys.exit(0)
+
+        for i,(node_name, node_time) in enumerate(lat.items(), start=0):
+            assert reduce(lambda x,y: x if len(x) == len(y) else False, node_time.values())
+            try:
+                demangler_out = subprocess.run(["./demangler", node_name], capture_output=True)
+                node_name = demangler_out.stdout.decode('utf-8')
+            except:
+                print("error: demangler")
+
+            print()
+            print(node_name)
+            print("num: ", len(list(node_time.values())[0]))
+
+            lat = list()
+            lat_source = list()
+            for j,(lat_name, time)  in enumerate(node_time.items(), start=1):
+                if args.kind == "mean":
+                    lat.append(mean(time))
+                elif args.kind == "median":
+                    lat.append(median_grouped(time))
+                elif args.kind == "tail":
+                    lat.append(max(time))
+                elif args.kind == "stdev":
+                    lat.append(stdev(time))
+                elif args.kind == "99percentile":
+                    lat.append(np.percentile(time,99))
+                lat_source.append(lat_name)
+
+            latencies.append(lat)
+
+    fig, ax = plt.subplots()
+    data = pd.DataFrame(latencies, index=index, columns=lat_source)
+    data.plot(kind='bar', stacked=True, ax=ax)
+    plt.show()
+
+
+parser = argparse.ArgumentParser()
+subparsers = parser.add_subparsers()
+
+parser_inter = subparsers.add_parser('inter')
+parser_inter.add_argument("src_node", metavar="<src node>")
+parser_inter.add_argument("dst_node", metavar="<dst node>")
+parser_inter.add_argument("--ros-detail", dest="ros_detail", action='store_true')
+parser_inter.set_defaults(handler=show_inter)
+
+parser_intra = subparsers.add_parser('intra')
+parser_intra.add_argument("node", metavar="<node>")
+parser_intra.add_argument("--ros-detail", dest="ros_detail", action='store_true')
+parser_intra.set_defaults(handler=show_intra)
+
+parser_stack = subparsers.add_parser('stack')
+parser_stack.add_argument("--nodes", "-n", metavar=("src","dst","name"), nargs=3, action="append", required=True)
+parser_stack.add_argument("--ros-detail", dest="ros_detail", action='store_true')
+parser_stack.add_argument("--kind","-k", choices=["median","mean","tail","stdev","99percentile"], default = "mean")
+parser_stack.set_defaults(handler=show_stack)
+
+args = parser.parse_args()
+if hasattr(args, 'handler'):
+    args.handler(args)
 else:
-    print("inter or intra")
+    print("Command line parse error")
