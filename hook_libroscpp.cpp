@@ -85,7 +85,7 @@ struct _data {
 };
 
 thread th;
-boost::lockfree::queue<_data> data_queue(0x1000);
+boost::lockfree::queue<_data> data_queue(0x10000);
 
 bool flag_publicaton_enqueueMessage = false;
 
@@ -251,10 +251,13 @@ extern "C" void _ZNK3ros9Publisher7publishERKN5boost8functionIFNS_17SerializedMe
     _ZN3ros12TopicManager8instanceEv()->publish(s->impl_->topic_, serfunc, m);
   }
 
+  // For Melodic
+  /*
   if (s->isLatched()) {
     boost::mutex::scoped_lock lock(s->impl_->last_message_mutex_);
     s->impl_->last_message_ = m;
   }
+  */
 }
 
 extern "C"  CallbackInterface::CallResult _ZN3ros17SubscriptionQueue4callEv(void *p) {
@@ -485,6 +488,8 @@ extern "C" int32_t _ZN3ros12TransportTCP5writeEPhj(void* p, uint8_t* buffer, uin
   {
     boost::recursive_mutex::scoped_lock lock(s->close_mutex_);
 
+    // For Melodic
+    /*
     // if socket is async and not connected, check if it's conneted
     if (!(s->flags_ & s->SYNCHRONOUS) && !s->async_connected_ && !s->closed_) {
       int ret, err;
@@ -500,6 +505,7 @@ extern "C" int32_t _ZN3ros12TransportTCP5writeEPhj(void* p, uint8_t* buffer, uin
         return 0;
       }
     }
+    */
 
     if (s->closed_)
     {
@@ -559,6 +565,8 @@ extern "C" int32_t _ZN3ros12TransportTCP4readEPhj(void *p, uint8_t* buffer, uint
   {
     boost::recursive_mutex::scoped_lock lock(s->close_mutex_);
 
+    // For Melodic
+    /*
     // if socket is async and not connected, check if it's conneted
     if (!(s->flags_ & s->SYNCHRONOUS) && !s->async_connected_ && !s->closed_) {
       int ret, err;
@@ -574,6 +582,7 @@ extern "C" int32_t _ZN3ros12TransportTCP4readEPhj(void *p, uint8_t* buffer, uint
         return 0;
       }
     }
+    */
 
     if (s->closed_)
     {
