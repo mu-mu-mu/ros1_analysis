@@ -8,6 +8,22 @@ import argparse
 import pandas as pd
 from statistics import mean, variance, stdev, median_grouped
 
+# ref. https://qiita.com/qsnsr123/items/325d21621cfe9e553c17
+plt.rcParams['font.family'] ='sans-serif'
+plt.rcParams['xtick.direction'] = 'in'
+plt.rcParams['ytick.direction'] = 'in'
+plt.rcParams['xtick.major.width'] = 1.0
+plt.rcParams['ytick.major.width'] = 1.0
+plt.rcParams['font.size'] = 9
+plt.rcParams['xtick.labelsize'] = 7
+plt.rcParams['ytick.labelsize'] = 8
+plt.rcParams['axes.linewidth'] = 1.0
+
+# plt.gca().xaxis.get_major_formatter().set_useOffset(True)
+# plt.locator_params(axis='x',nbins=3)
+# plt.gca().yaxis.set_tick_params(which='both', direction='in',bottom=True, top=True, left=True, right=True)
+
+
 func_types =[
   "Publication_publish",
   "Publisher_publish",
@@ -209,12 +225,17 @@ def show_inter(args):
 
     lat = calc_e2e_inter(n1,n2, args)
 
-    fig = plt.figure()
-
     node_num = len(lat)
     if node_num == 0:
         print("None")
         sys.exit(0)
+
+    time_num = len(list(lat.values())[0])
+
+    if args.concat:
+        fig, ax = plt.subplots(node_num, time_num, sharex="row", sharey="row")
+    else:
+        fig, ax = plt.subplots(node_num, 1, sharex="row", sharey="row")
 
     for i,(node_name, node_time) in enumerate(lat.items(), start=0):
         assert reduce(lambda x,y: x if len(x) == len(y) else False, node_time.values())
@@ -228,10 +249,13 @@ def show_inter(args):
         print(node_name)
         print("num: ", len(list(node_time.values())[0]))
 
-        for j,(lat_name, time)  in enumerate(node_time.items(), start=1):
-            ax = fig.add_subplot(node_num,1,1) #4, 4*i+j )
-            ax.hist(time, bins =50, histtype = 'bar', label = lat_name, range=(0,300000))
-            ax.legend(loc="best")
+        for j,(lat_name, time)  in enumerate(node_time.items()):
+            if args.concat:
+                ax[node_num*i+j].hist(time, bins =50, histtype = 'bar')
+                ax[node_num*i+j].set_title(lat_name)
+            else:
+                ax[node_num*i+j].hist(time, bins =50, histtype = 'bar', label = lat_name)
+                ax[node_num*i+j].legend(loc="best")
 
     plt.show()
 
@@ -260,8 +284,12 @@ def show_intra(args):
         print(node_name)
         print("num: ", len(list(node_time.values())[0]))
 
+        time_num = len(node_time)
         for j,(lat_name, time)  in enumerate(node_time.items(), start=1):
-            ax = fig.add_subplot(node_num, 1, i+j )
+            if args.concat:
+                ax = fig.add_subplot(node_num, time_num, time_num*i+j)
+            else:
+                ax = fig.add_subplot(node_num,1,1)
             ax.hist(time, bins =50, histtype = 'bar', label = lat_name)
             ax.legend(loc="best")
 
@@ -327,11 +355,13 @@ parser_inter = subparsers.add_parser('inter')
 parser_inter.add_argument("src_node", metavar="<src node>")
 parser_inter.add_argument("dst_node", metavar="<dst node>")
 parser_inter.add_argument("--ros-detail", dest="ros_detail", action='store_true')
+parser_inter.add_argument("-c", dest="concat", action='store_true')
 parser_inter.set_defaults(handler=show_inter)
 
 parser_intra = subparsers.add_parser('intra')
 parser_intra.add_argument("node", metavar="<node>")
 parser_intra.add_argument("--ros-detail", dest="ros_detail", action='store_true')
+parser_intra.add_argument("-c", dest="concat", action='store_true')
 parser_intra.set_defaults(handler=show_intra)
 
 parser_stack = subparsers.add_parser('stack')
