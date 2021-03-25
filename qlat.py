@@ -3,7 +3,7 @@ from bcc import BPF
 from time import strftime
 
 from qlat_text import *
-libroscpp_path = "/opt/ros/noetic/lib/libroscpp.so"
+libroscpp_path = "/opt/ros/melodic/lib/libroscpp.so"
 
 ros_app_pids = dict()
 ros_app_pids_delta = dict()
