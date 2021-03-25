@@ -5,7 +5,7 @@ from ctypes import c_ulong
 
 
 from qlat_text import *
-libroscpp_path = "/opt/ros/noetic/lib/libroscpp.so"
+libroscpp_path = "/opt/ros/melodic/lib/libroscpp.so"
 
 ros_app_tgid = list()
 ros_app_pid_tgid = dict()
