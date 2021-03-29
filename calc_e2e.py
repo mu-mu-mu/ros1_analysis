@@ -233,9 +233,9 @@ def show_inter(args):
     time_num = len(list(lat.values())[0])
 
     if args.concat:
-        fig, ax = plt.subplots(node_num, time_num, sharex="row", sharey="row")
+        fig, ax = plt.subplots(node_num, time_num, sharex="row", sharey="row",squeeze=False)
     else:
-        fig, ax = plt.subplots(node_num, 1, sharex="row", sharey="row")
+        fig, ax = plt.subplots(node_num, 1, sharex="row", sharey="row",squeeze=False)
 
     for i,(node_name, node_time) in enumerate(lat.items(), start=0):
         assert reduce(lambda x,y: x if len(x) == len(y) else False, node_time.values())
@@ -251,11 +251,11 @@ def show_inter(args):
 
         for j,(lat_name, time)  in enumerate(node_time.items()):
             if args.concat:
-                ax[node_num*i+j].hist(time, bins =50, histtype = 'bar')
-                ax[node_num*i+j].set_title(lat_name)
+                ax[i,j].hist(time, bins =50, histtype = 'bar')
+                ax[i,j].set_title(lat_name)
             else:
-                ax[node_num*i+j].hist(time, bins =50, histtype = 'bar', label = lat_name)
-                ax[node_num*i+j].legend(loc="best")
+                ax[i,0].hist(time, bins =50, histtype = 'bar', label = lat_name)
+                ax[i,0].legend(loc="best")
 
     plt.show()
 
