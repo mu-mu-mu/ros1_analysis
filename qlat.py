@@ -1,6 +1,8 @@
 from __future__ import print_function
 from bcc import BPF
-from time import strftime
+from time import strftime, time
+from ctypes import c_ulong
+
 
 from qlat_text import *
 libroscpp_path = "/opt/ros/noetic/lib/libroscpp.so"
@@ -9,6 +11,10 @@ ros_app_pids = dict()
 ros_app_pids_delta = dict()
 
 bpf_get_tid = BPF(text=bpf_text_get_tid)
+
+nw = dict()
+nw["send"] = list()
+nw["recv"] = list()
 
 def get_tid_attach(tgid):
     # Publication::enqueueMessage(ros::SerializedMessage const&)
@@ -22,7 +28,6 @@ def get_tid_attach(tgid):
     # ros::SubscriptionQueue::call()
     bpf_get_tid.attach_uprobe(name=libroscpp_path, pid = tgid,
             sym="_ZN3ros11Publication7publishERNS_17SerializedMessageE", fn_name="publish")
-
 
 def get_tid_detach(tgid, func):
     if (func == "enqueueMessage"):
@@ -56,6 +61,11 @@ def sched_check():
     bpf_get_tid.attach_kprobe(event="wake_up_new_task", fn_name="trace_wake_up_new_task")
     bpf_get_tid.attach_kprobe(event="finish_task_switch", fn_name="trace_run")
 
+def nw_check():
+    bpf_get_tid.attach_kprobe(event="tcp_sendmsg", fn_name="trace_tcp_sendmsg")
+    bpf_get_tid.attach_kprobe(event="tcp_cleanup_rbuf", fn_name="trace_tcp_cleanup_rbuf")
+
+
 def print_get_pid(cpu, data, size):
     event = bpf_get_tid["data_pid"].event(data)
 
@@ -81,18 +91,41 @@ def print_delta(cpu, data, size):
     event = bpf_get_tid["data_delta"].event(data)
     ros_app_pids_delta[event.pid].append(event.ns)
 
+
 bpf_get_tid["data_pid"].open_perf_buffer(print_get_pid)
 bpf_get_tid["data_init"].open_perf_buffer(print_init)
 bpf_get_tid["data_delta"].open_perf_buffer(print_delta)
 
 ros_init()
 sched_check()
+nw_check()
 
 while 1:
     try:
-        bpf_get_tid.perf_buffer_poll()
+        bpf_get_tid.perf_buffer_poll(timeout=100)
+
+        t = int(time()*1000000)
+        k = map(lambda x: x.value, bpf_get_tid["bytes"].keys())
+
+        if 0 in k:
+            nw["send"].append((t, int(bpf_get_tid["bytes"][c_ulong(0)].value)))
+        else:
+            nw["send"].append((t, 0))
+
+        if 1 in k:
+            nw["recv"].append((t, int(bpf_get_tid["bytes"][c_ulong(1)].value)))
+        else:
+            nw["recv"].append((t, 0))
+
+        bpf_get_tid["bytes"].clear()
+
     except KeyboardInterrupt:
         for pid, vals in ros_app_pids_delta.items():
             with open("data/" + ros_app_pids[pid] + str(pid) + ".txt", "w") as f:
                 f.write("\n".join(map(lambda x: "Q " + str(x), vals)))
+        with open("data/nw","w") as f:
+            for i in range(len(nw["send"])):
+                t,ps = nw["send"][i]
+                t,pr = nw["recv"][i]
+                f.write(str(t) + " " + str(ps) + " " + str(pr)+ "\n")
         exit()

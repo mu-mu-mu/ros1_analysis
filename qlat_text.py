@@ -4,6 +4,8 @@ bpf_text_get_tid = """
 #include <linux/sched.h>
 #include <linux/nsproxy.h>
 #include <linux/pid_namespace.h>
+#include <net/sock.h>
+#include <bcc/proto.h>
 
 
 struct data_t {
@@ -34,6 +36,7 @@ BPF_HASH(ros_pids, u32);
 
 BPF_HASH(start, u32);
 
+BPF_HASH(bytes, u64, u64);
 
 ////////////
 
@@ -144,6 +147,40 @@ int trace_run(struct pt_regs *ctx, struct task_struct *prev)
     data_delta.perf_submit(ctx, &data, sizeof(data));
 
     start.delete(&pid);
+    return 0;
+
+}
+
+
+int trace_tcp_sendmsg(struct pt_regs *ctx, struct sock *sk,
+    struct msghdr *msg, size_t size)
+{
+    u16 dport = 0, family = sk->__sk_common.skc_family;
+    if (family == AF_INET) {
+        u64 send = 0;
+        bytes.increment(send, size);
+    } else if (family == AF_INET6) {
+        u64 send = 0;
+        bytes.increment(send, size);
+    }
+    // else drop
+    return 0;
+}
+
+int trace_tcp_cleanup_rbuf(struct pt_regs *ctx, struct sock *sk, int copied)
+{
+    if (copied <= 0)
+        return 0;
+
+    u16 dport = 0, family = sk->__sk_common.skc_family;
+    if (family == AF_INET) {
+        u64 recv = 1;
+        bytes.increment(recv, copied);
+    } else if (family == AF_INET6) {
+        u64 recv = 1;
+        bytes.increment(recv, copied);
+    }
+    // else drop
     return 0;
 }
 """
