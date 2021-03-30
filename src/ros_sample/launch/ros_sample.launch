@@ -1,0 +1,15 @@
+<launch>
+  <group ns="ros_sample">
+    <node pkg="ros_sample" name="node1" type="ros_sample_node1" output="screen">
+      <remap from="~output" to="topic1_2" />
+    </node>
+  </group>
+
+  <group ns="ros_sample">
+    <node pkg="ros_sample" name="node2" type="ros_sample_node2" output="screen">
+      <remap from="~input" to="topic1_2" />
+      <remap from="~output" to="topic2_3" />
+    </node>
+  </group>
+
+</launch>
