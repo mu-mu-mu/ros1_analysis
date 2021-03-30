@@ -152,6 +152,7 @@ def calc_e2e_intra(node,option):
 
 def calc_e2e_inter(node1,node2, option):
     lat = dict()
+    timeline = dict()
 
     for seq, t in node1["Publisher_publish"].items():
         time0 = t["time"]
@@ -200,30 +201,48 @@ def calc_e2e_inter(node1,node2, option):
             lat[name]["kernel"] = list()
             lat[name]["sub queue"] = list()
 
-            if not option.ros_detail:
+            timeline[name] = dict()
+            timeline[name]["pub queue"] = list()
+            timeline[name]["kernel"] = list()
+            timeline[name]["sub queue"] = list()
+
+            if not hasattr(option,"ros_detail") or not option.ros_detail:
                 lat[name]["ROS"] = list()
             else:
                 lat[name]["ROS: app - pub queue"] = list()
                 lat[name]["ROS: pub queue - send"] = list()
                 lat[name]["ROS: recv - sub queue"] = list()
 
+                timeline[name]["ROS: app - pub queue"] = list()
+                timeline[name]["ROS: pub queue - send"] = list()
+                timeline[name]["ROS: recv - sub queue"] = list()
+
         lat[name]["pub queue"].append(time2 - time1)
         lat[name]["kernel"].append(time4 - time3)
         lat[name]["sub queue"].append(time6 - time5)
-        if not option.ros_detail:
+
+        timeline[name]["pub queue"].append(time1)
+        timeline[name]["kernel"].append(time3)
+        timeline[name]["sub queue"].append(time5)
+
+        if not hasattr(option,"ros_detail") or not option.ros_detail:
             lat[name]["ROS"].append(time6 - time0 - (time6 - time5) - (time4 - time3) - (time2 - time1))
         else:
             lat[name]["ROS: app - pub queue"].append(time1 - time0)
             lat[name]["ROS: pub queue - send"].append(time3 - time2)
             lat[name]["ROS: recv - sub queue"].append(time5 - time4)
 
-    return lat
+            timeline[name]["ROS: app - pub queue"].append(time0)
+            timeline[name]["ROS: pub queue - send"].append(time2)
+            timeline[name]["ROS: recv - sub queue"].append(time4)
+
+    return lat,timeline
 
 def show_inter(args):
     n1 = collect(args.src_node)
     n2 = collect(args.dst_node)
 
-    lat = calc_e2e_inter(n1,n2, args)
+    lat,timeline = calc_e2e_inter(n1,n2, args)
 
     node_num = len(lat)
     if node_num == 0:
@@ -304,7 +323,7 @@ def show_stack(args):
         n1 = collect(nodes[0])
         n2 = collect(nodes[1])
 
-        lat = calc_e2e_inter(n1,n2,args)
+        lat,timeline = calc_e2e_inter(n1,n2,args)
 
         index.append(nodes[2])
 
@@ -347,6 +366,45 @@ def show_stack(args):
     data.plot(kind='bar', stacked=True, ax=ax)
     plt.show()
 
+def show_timeline(args):
+    n1 = collect(args.src_node)
+    n2 = collect(args.dst_node)
+
+    if args.pickup == None:
+        print("Please select: kernel, pubq, subq, ros")
+        sys.exit(0)
+    pickup_num = len(args.pickup)
+
+    lat, timeline = calc_e2e_inter(n1,n2, args)
+
+    node_num = len(lat)
+    if node_num == 0:
+        print("None")
+        sys.exit(0)
+
+    time_num = len(list(lat.values())[0])
+
+    fig, ax = plt.subplots(node_num, pickup_num, sharex="row", sharey="row",squeeze=False)
+
+    for i,(node_name, node_time) in enumerate(lat.items(), start=0):
+        assert reduce(lambda x,y: x if len(x) == len(y) else False, node_time.values())
+        try:
+            demangler_out = subprocess.run(["./demangler", node_name], capture_output=True)
+            node_name_demangle = demangler_out.stdout.decode('utf-8')
+        except:
+            print("error: demangler")
+            node_name_demangle = ""
+
+        print()
+        print(node_name, " (", node_name_demangle, ")")
+        print("num: ", len(list(node_time.values())[0]))
+
+        for j,key in enumerate(args.pickup):
+            ax[i,j].plot(timeline[node_name][key], lat[node_name][key])
+            ax[i,j].set_title(key)
+
+    plt.show()
+
 
 parser = argparse.ArgumentParser()
 subparsers = parser.add_subparsers()
@@ -369,6 +427,14 @@ parser_stack.add_argument("--nodes", "-n", metavar=("src","dst","name"), nargs=3
 parser_stack.add_argument("--ros-detail", dest="ros_detail", action='store_true')
 parser_stack.add_argument("--kind","-k", choices=["median","mean","tail","stdev","99percentile"], default = "mean")
 parser_stack.set_defaults(handler=show_stack)
+
+parser_timeline = subparsers.add_parser('timeline')
+parser_timeline.add_argument("src_node", metavar="<src node>")
+parser_timeline.add_argument("dst_node", metavar="<dst node>")
+parser_timeline.add_argument('--kernel', dest='pickup', action='append_const', const="kernel")
+parser_timeline.add_argument('--pubq', dest='pickup', action='append_const', const="pub queue")
+parser_timeline.add_argument('--subq', dest='pickup', action='append_const', const="sub queue")
+parser_timeline.set_defaults(handler=show_timeline)
 
 args = parser.parse_args()
 if hasattr(args, 'handler'):
