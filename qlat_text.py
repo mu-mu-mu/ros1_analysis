@@ -23,6 +23,7 @@ BPF_PERF_OUTPUT(data_init);
 
 struct delta {
     u32 pid;
+    u32 tgid;
     u64 ns;
 };
 
@@ -32,7 +33,7 @@ BPF_PERF_OUTPUT(data_delta);
 #define IOTHREAD 0
 #define PUBLISH 1
 
-BPF_HASH(ros_pids, u32);
+BPF_HASH(ros_pids, u32, u32);
 
 BPF_HASH(start, u32);
 
@@ -46,10 +47,14 @@ int init(struct pt_regs *ctx) {
     u64 id = bpf_get_current_pid_tgid();
     data.tgid = id >> 32;
 
+    u32 k = 0;
+    ros_pids.update(&data.tgid, &k);
+
     data_init.perf_submit(ctx, &data, sizeof(data));
     return 0;
 }
 
+/*
 int enqueueMessage(struct pt_regs *ctx) {
     struct data_t data = {};
 
@@ -85,10 +90,12 @@ int publish(struct pt_regs *ctx) {
     data_pid.perf_submit(ctx, &data, sizeof(data));
     return 0;
 }
+*/
 
 static int trace_enqueue(u32 tgid, u32 pid)
 {
-    u64 *is_ros_app = ros_pids.lookup(&pid);
+
+    u32 *is_ros_app = ros_pids.lookup(&tgid);
     if (is_ros_app == NULL) 
         return 0;
 
@@ -111,24 +118,23 @@ int trace_ttwu_do_wakeup(struct pt_regs *ctx, struct rq *rq, struct task_struct 
 // calculate latency
 int trace_run(struct pt_regs *ctx, struct task_struct *prev)
 {
-    u32 pid, tgid;
+    u32 tgid,pid;
     // ivcsw: treat like an enqueue event and store timestamp
     // memo: ivcsw はpreemptされてすぐにQに入る
     if (prev->state == TASK_RUNNING) {
         tgid = prev->tgid;
-        pid = prev->pid;
 
-        u64 *is_ros_app = ros_pids.lookup(&pid);
+        u32 *is_ros_app = ros_pids.lookup(&tgid);
         if (is_ros_app != NULL) {
             u64 ts = bpf_ktime_get_ns();
-            start.update(&pid, &ts);
+            start.update(&tgid, &ts);
         }
     }
 
     tgid = bpf_get_current_pid_tgid() >> 32;
     pid = bpf_get_current_pid_tgid();
 
-    u64 *is_ros_app = ros_pids.lookup(&pid);
+    u32 *is_ros_app = ros_pids.lookup(&tgid);
     if (is_ros_app == NULL) 
         return 0;
 
@@ -142,6 +148,7 @@ int trace_run(struct pt_regs *ctx, struct task_struct *prev)
     }
 
     data.pid = pid;
+    data.tgid = tgid;
     data.ns = bpf_ktime_get_ns() - *tsp;
 
     data_delta.perf_submit(ctx, &data, sizeof(data));

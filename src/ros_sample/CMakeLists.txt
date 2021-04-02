@@ -16,6 +16,7 @@ add_message_files(
   n32kb.msg
   n256kb.msg
   n1mb.msg
+  n2mb.msg
   n4mb.msg
 )
 

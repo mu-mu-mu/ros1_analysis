@@ -1,2 +1,2 @@
 std_msgs/Header header
-n1mb n
+n1kb n

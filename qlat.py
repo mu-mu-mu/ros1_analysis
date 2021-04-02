@@ -7,7 +7,8 @@ from ctypes import c_ulong
 from qlat_text import *
 libroscpp_path = "/opt/ros/noetic/lib/libroscpp.so"
 
-ros_app_pids = dict()
+ros_app_tgid = list()
+ros_app_pid_tgid = dict()
 ros_app_pids_delta = dict()
 
 bpf_get_tid = BPF(text=bpf_text_get_tid)
@@ -16,18 +17,18 @@ nw = dict()
 nw["send"] = list()
 nw["recv"] = list()
 
-def get_tid_attach(tgid):
-    # Publication::enqueueMessage(ros::SerializedMessage const&)
-    bpf_get_tid.attach_uprobe(name=libroscpp_path, pid = tgid,
-            sym="_ZN3ros11Publication14enqueueMessageERKNS_17SerializedMessageE", fn_name="enqueueMessage")
-
-    # ros::SubscriptionQueue::call()
-    bpf_get_tid.attach_uprobe(name=libroscpp_path, pid = tgid,
-            sym="_ZN3ros17SubscriptionQueue4callEv", fn_name="publish")
-
-    # ros::SubscriptionQueue::call()
-    bpf_get_tid.attach_uprobe(name=libroscpp_path, pid = tgid,
-            sym="_ZN3ros11Publication7publishERNS_17SerializedMessageE", fn_name="publish")
+# def get_tid_attach(tgid):
+#     # Publication::enqueueMessage(ros::SerializedMessage const&)
+#     bpf_get_tid.attach_uprobe(name=libroscpp_path, pid = tgid,
+#             sym="_ZN3ros11Publication14enqueueMessageERKNS_17SerializedMessageE", fn_name="enqueueMessage")
+# 
+#     # ros::SubscriptionQueue::call()
+#     bpf_get_tid.attach_uprobe(name=libroscpp_path, pid = tgid,
+#             sym="_ZN3ros17SubscriptionQueue4callEv", fn_name="publish")
+# 
+#     # ros::SubscriptionQueue::call()
+#     bpf_get_tid.attach_uprobe(name=libroscpp_path, pid = tgid,
+#             sym="_ZN3ros11Publication7publishERNS_17SerializedMessageE", fn_name="publish")
 
 def get_tid_detach(tgid, func):
     if (func == "enqueueMessage"):
@@ -65,7 +66,6 @@ def nw_check():
     bpf_get_tid.attach_kprobe(event="tcp_sendmsg", fn_name="trace_tcp_sendmsg")
     bpf_get_tid.attach_kprobe(event="tcp_cleanup_rbuf", fn_name="trace_tcp_cleanup_rbuf")
 
-
 def print_get_pid(cpu, data, size):
     event = bpf_get_tid["data_pid"].event(data)
 
@@ -85,10 +85,14 @@ def print_get_pid(cpu, data, size):
 def print_init(cpu, data, size):
     event = bpf_get_tid["data_init"].event(data)
     tgid = event.tgid
-    get_tid_attach(tgid)
+    ros_app_tgid.append(tgid)
+    # get_tid_attach(tgid)
 
 def print_delta(cpu, data, size):
     event = bpf_get_tid["data_delta"].event(data)
+    if not event.pid in ros_app_pids_delta.keys():
+        ros_app_pids_delta[event.pid] = list()
+        ros_app_pid_tgid[event.pid] = event.tgid
     ros_app_pids_delta[event.pid].append(event.ns)
 
 
@@ -121,9 +125,10 @@ while 1:
 
     except KeyboardInterrupt:
         for pid, vals in ros_app_pids_delta.items():
-            with open("data/" + ros_app_pids[pid] + str(pid) + ".txt", "w") as f:
+            with open("data/qlat" +str(ros_app_pid_tgid[pid]) + "-" + str(pid) + ".txt", "w") as f:
                 f.write("\n".join(map(lambda x: "Q " + str(x), vals)))
-        with open("data/nw","w") as f:
+        tgids = str(min(ros_app_tgid)) + "-" + str(max(ros_app_tgid))
+        with open("data/nw"+tgids,"w") as f:
             for i in range(len(nw["send"])):
                 t,ps = nw["send"][i]
                 t,pr = nw["recv"][i]
