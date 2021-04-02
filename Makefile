@@ -24,5 +24,11 @@ run1_w_lhook: lhook.so
 	mkdir -p ~/.ros/pl_dir
 	LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libboost_system.so $(C_DIR)/lhook.so" roslaunch ros_sample1 ros_sample1.launch
 
+run_w_lhook: lhook.so
+	source /opt/ros/melodic/setup.sh
+	source ./devel/setup.sh
+	mkdir -p ~/.ros/pl_dir
+	LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libboost_system.so $(C_DIR)/lhook.so" roslaunch ros_sample ros_sample.launch
+
 clean_pl_data:
 	rm ~/.ros/pl_dir/log*

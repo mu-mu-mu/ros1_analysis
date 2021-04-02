@@ -39,9 +39,12 @@
 #include "ros/publisher.h"
 #undef private
 
+#define private public
+#include "ros/message_deserializer.h"
+#undef private
+
 #include "ros/ros.h"
 #include "ros/callback_queue.h"
-#include "ros/message_deserializer.h"
 #include "ros/publication.h"
 
 // Dirty trick!
@@ -79,13 +82,13 @@ struct _data {
   pid_t pid;
   pid_t tid;
   uint64_t ns;
-  uint32_t seq1;
-  uint32_t seq2;
+  uint64_t seq1;
+  uint64_t seq2;
   const char* name = "none";
 };
 
 thread th;
-boost::lockfree::queue<_data> data_queue(0x10000);
+boost::lockfree::queue<_data> data_queue(0x1000);
 
 bool flag_publicaton_enqueueMessage = false;
 
@@ -129,7 +132,6 @@ extern "C" void _ZN3ros4initERiPPcRKNSt7__cxx1112basic_stringIcSt11char_traitsIc
 }
 
 using enqueueMessage_type = bool (*)(void* ,void*);
-
 // ros::Publication::enqueueMessage(ros::SerializedMessage const&)
 extern "C" bool _ZN3ros11Publication14enqueueMessageERKNS_17SerializedMessageE(void *p, void *q) {
   static void *orig = NULL;
@@ -148,6 +150,7 @@ extern "C" bool _ZN3ros11Publication14enqueueMessageERKNS_17SerializedMessageE(v
   auto m = reinterpret_cast<ros::SerializedMessage*>(q);
 
   uint32_t seq1 = *(uint32_t*)m->message_start;
+  //cout << "enq " << (uint32_t*)m->buf.get() << " " << pid << endl;
 
   bool res = ((enqueueMessage_type)orig)(p,q);
 
@@ -174,7 +177,7 @@ extern "C" bool _ZN3ros11Publication7publishERNS_17SerializedMessageE(void *p, v
   if (orig == NULL) {
     orig = dlsym(RTLD_NEXT, "_ZN3ros11Publication7publishERNS_17SerializedMessageE");
   }
-  static uint32_t seq = 0;
+  //static uint32_t seq = 0;
 
   static pid_t pid = 0, tid = 0;
   if (pid == 0) {
@@ -186,9 +189,9 @@ extern "C" bool _ZN3ros11Publication7publishERNS_17SerializedMessageE(void *p, v
 
   struct _data data = {};
   data.type = fun_type::Publication_publish;
-  data.seq1 = *(uint32_t*)m->message_start;
-
-  *(uint32_t*)m->message_start = seq++;
+  cout << "push " << (uint32_t*)m->buf.get() << " " << data.pid << endl;
+  uint64_t seq1 = (uint64_t)m;
+  uint64_t seq2 = (uint64_t)m->buf.get();
 
   bool res = ((publish_type)orig)(p,q);
 
@@ -196,15 +199,14 @@ extern "C" bool _ZN3ros11Publication7publishERNS_17SerializedMessageE(void *p, v
   data.ns = std::chrono::duration_cast<chrono::nanoseconds>(now).count();
   data.pid = pid;
   data.tid = tid;
-  data.seq1 = *(uint32_t*)m->message_start;
-  data.seq2 = *(uint32_t*)m->message_start;
+  data.seq1 = seq1; //*(uint32_t*)m->message_start;
+  data.seq2 = seq2; //*(uint32_t*)m->message_start;
   data_queue.push(data);
 
   return res;
 }
 
 extern "C" TopicManagerPtr& _ZN3ros12TopicManager8instanceEv();
-
 //ros::Publisher::publish(boost::function<ros::SerializedMessage ()> const&, ros::SerializedMessage&)
 extern "C" void _ZNK3ros9Publisher7publishERKN5boost8functionIFNS_17SerializedMessageEvEEERS3_(void *p, const boost::function<SerializedMessage(void)>& serfunc, SerializedMessage& m)
 {
@@ -241,10 +243,12 @@ extern "C" void _ZNK3ros9Publisher7publishERKN5boost8functionIFNS_17SerializedMe
   PublicationPtr pp = _ZN3ros12TopicManager8instanceEv()->lookupPublicationWithoutLock(s->impl_->topic_);
   if (pp->hasSubscribers() || pp->isLatching())
   {
+    cout << "push0 " << &m << " " << data.tid << endl;
+    
     _ZN3ros12TopicManager8instanceEv()->publish(s->impl_->topic_, serfunc, m);
 
-    data.seq1 = *(uint32_t*)m.message_start;
-    data.seq2 = *(uint32_t*)m.message_start;
+    data.seq1 = (uint64_t)&m; //*(uint32_t*)m.message_start;
+    data.seq2 = (uint64_t)&m; //*(uint32_t*)m.message_start;
     data_queue.push(data);
   }
   else {
@@ -338,7 +342,7 @@ extern "C"  CallbackInterface::CallResult _ZN3ros17SubscriptionQueue4callEv(void
       data.type = fun_type::SubscriptionQueue_call_before_callback;
 
       data.seq1 = *(uint32_t*)msg.get();
-      *(uint32_t*)msg.get() = push_seq_table[data.seq1 % 0x1000];
+      //*(uint32_t*)msg.get() = push_seq_table[data.seq1 % 0x1000];
 
       data.seq2 = push_seq_table[data.seq1 % 0x1000];
       data.name = i.helper->getTypeInfo().name();
@@ -424,7 +428,10 @@ extern "C" void _ZN3ros17SubscriptionQueue4pushERKN5boost10shared_ptrINS_26Subsc
   // Measurement
   {
     auto now = chrono::system_clock::now().time_since_epoch();
-    VoidConstPtr msg = deserializer->deserialize();
+    ros::SerializedMessage* m = &(deserializer->serialized_message_);
+
+    cout << "push1 " << m << " " << data.pid << endl;
+    //VoidConstPtr msg = deserializer->deserialize();
 
     {
       boost::mutex::scoped_lock push_lock(subscription_queue_push_mutex);
@@ -433,9 +440,12 @@ extern "C" void _ZN3ros17SubscriptionQueue4pushERKN5boost10shared_ptrINS_26Subsc
     }
 
     data.ns = std::chrono::duration_cast<chrono::nanoseconds>(now).count();
-    data.seq1 = *(uint32_t*)msg.get();
-
-    *(uint32_t*)msg.get() = data.seq2;
+    //data.seq1 = *(uint32_t*)m->message_start;
+    //data.seq1 = *(uint32_t*)msg.get();
+    //
+    
+    //*(uint32_t*)m->message_start = data.seq2;
+    //*(uint32_t*)msg.get() = data.seq2;
     data_queue.push(data);
 
     push_seq_table[data.seq2 % 0x1000] = data.seq1;
