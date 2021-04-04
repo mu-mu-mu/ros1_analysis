@@ -39,10 +39,18 @@
 #include "ros/publisher.h"
 #undef private
 
+#define private public
+#include "ros/message_deserializer.h"
+#undef private
+
 #include "ros/ros.h"
 #include "ros/callback_queue.h"
-#include "ros/message_deserializer.h"
 #include "ros/publication.h"
+#include "ros/publisher_link.h"
+
+#define private public
+#include "ros/subscription.h"
+#undef private
 
 // Dirty trick!
 #define private public
@@ -377,6 +385,7 @@ extern "C" void _ZN3ros17SubscriptionQueue4pushERKN5boost10shared_ptrINS_26Subsc
     data.type = fun_type::SubscriptionQueue_push;
     data.pid = getpid();
     data.tid = syscall(SYS_gettid);
+    initialized = true;
   }
 
   boost::mutex::scoped_lock lock(s->queue_mutex_);
@@ -421,7 +430,7 @@ extern "C" void _ZN3ros17SubscriptionQueue4pushERKN5boost10shared_ptrINS_26Subsc
   // Measurement
   {
     auto now = chrono::system_clock::now().time_since_epoch();
-    VoidConstPtr msg = deserializer->deserialize();
+    ros::SerializedMessage* m = &(deserializer->serialized_message_);
 
     {
       boost::mutex::scoped_lock push_lock(subscription_queue_push_mutex);
@@ -430,13 +439,98 @@ extern "C" void _ZN3ros17SubscriptionQueue4pushERKN5boost10shared_ptrINS_26Subsc
     }
 
     data.ns = std::chrono::duration_cast<chrono::nanoseconds>(now).count();
-    data.seq1 = *(uint32_t*)msg.get();
+    data.seq1 = *(uint32_t*)m->message_start;
 
-    *(uint32_t*)msg.get() = data.seq2;
+    *(uint32_t*)m->message_start = data.seq2;
     data_queue.push(data);
 
     push_seq_table[data.seq2 % 0x1000] = data.seq1;
   }
+}
+
+extern "C" uint32_t _ZN3ros12Subscription13handleMessageERKNS_17SerializedMessageEbbRKN5boost10shared_ptrISt3mapINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESC_St4lessISC_ESaISt4pairIKSC_SC_EEEEERKNS5_INS_13PublisherLinkEEE
+//uint32_t Subscription::handleMessage
+(Subscription* s, const SerializedMessage& m, bool ser, bool nocopy, const boost::shared_ptr<M_string>& connection_header, const PublisherLinkPtr& link)
+{
+  boost::mutex::scoped_lock lock(s->callbacks_mutex_);
+
+  uint32_t drops = 0;
+
+  // Cache the deserializers by type info.  If all the subscriptions are the same type this has the same performance as before.  If
+  // there are subscriptions with different C++ type (but same ROS message type), this now works correctly rather than passing
+  // garbage to the messages with different C++ types than the first one.
+  s->cached_deserializers_.clear();
+
+  ros::Time receipt_time = ros::Time::now();
+
+  for (Subscription::V_CallbackInfo::iterator cb = s->callbacks_.begin();
+       cb != s->callbacks_.end(); ++cb)
+  {
+    const Subscription::CallbackInfoPtr& info = *cb;
+
+    //ROS_ASSERT(info->callback_queue_);
+
+    const std::type_info* ti = &info->helper_->getTypeInfo();
+
+    if ((nocopy && m.type_info && *ti == *m.type_info) || (ser && (!m.type_info || *ti != *m.type_info)))
+    {
+      MessageDeserializerPtr deserializer;
+
+      Subscription::V_TypeAndDeserializer::iterator des_it = s->cached_deserializers_.begin();
+      Subscription::V_TypeAndDeserializer::iterator des_end = s->cached_deserializers_.end();
+      for (; des_it != des_end; ++des_it)
+      {
+        if (*des_it->first == *ti)
+        {
+          deserializer = des_it->second;
+          break;
+        }
+      }
+
+      if (!deserializer)
+      {
+        deserializer = boost::make_shared<MessageDeserializer>(info->helper_, m, connection_header);
+        s->cached_deserializers_.push_back(std::make_pair(ti, deserializer));
+      }
+
+      bool was_full = false;
+      bool nonconst_need_copy = false;
+      if (s->callbacks_.size() > 1)
+      {
+        nonconst_need_copy = true;
+      }
+
+      info->subscription_queue_->push(info->helper_, deserializer, info->has_tracked_object_, info->tracked_object_, nonconst_need_copy, receipt_time, &was_full);
+
+      if (was_full)
+      {
+        ++drops;
+      }
+      else
+      {
+        info->callback_queue_->addCallback(info->subscription_queue_, (uint64_t)info.get());
+      }
+    }
+  }
+
+  // measure statistics
+  //s->statistics_.callback(connection_header, s->name_, link->getCallerID(), m, link->getStats().bytes_received_, receipt_time, drops > 0, link->getConnectionID());
+
+  // If this link is latched, store off the message so we can immediately pass it to new subscribers later
+  if (link->isLatched())
+  {
+    Subscription::LatchInfo li;
+    li.connection_header = connection_header;
+    li.link = link;
+    li.message = m;
+    li.receipt_time = receipt_time;
+    s->latched_messages_[link] = li;
+  }
+
+  s->cached_deserializers_.clear();
+  cout << "po" << endl;
+
+  return drops;
 }
 /*
 using send_type = ssize_t (*)(int, const void *, size_t, int);

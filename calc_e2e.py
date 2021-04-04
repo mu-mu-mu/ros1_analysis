@@ -19,11 +19,6 @@ plt.rcParams['xtick.labelsize'] = 7
 plt.rcParams['ytick.labelsize'] = 8
 plt.rcParams['axes.linewidth'] = 1.0
 
-# plt.gca().xaxis.get_major_formatter().set_useOffset(True)
-# plt.locator_params(axis='x',nbins=3)
-# plt.gca().yaxis.set_tick_params(which='both', direction='in',bottom=True, top=True, left=True, right=True)
-
-
 func_types =[
   "Publication_publish",
   "Publisher_publish",
@@ -39,6 +34,8 @@ func_types =[
   "accept",
   "connect",
   "bind",
+
+  "SubscriptionQueue_call_before_callback_2",
   ]
 
 # 2 1613531009784539434 11345 11361 2 2
@@ -54,6 +51,7 @@ def collect(name):
     node["TransportTCP_read"] = dict()
     node["socket"] = dict()
     node["port"] = list()
+    node["SubscriptionQueue_call_before_callback_2"] = dict()
     
     with open(name) as f:
         for _l in f.readlines():
@@ -123,9 +121,29 @@ def collect(name):
                 node["socket"][seq2]["from"] = seq1
                 node["port"].append(seq1)
 
+            elif f_type == "SubscriptionQueue_call_before_callback_2":
+                node["SubscriptionQueue_call_before_callback_2"][seq1] = dict()
+                node["SubscriptionQueue_call_before_callback_2"][seq1]["time"] = time 
             else:
                 print("Error")
     return node
+
+def collect_nw(name):
+    tl = list()
+    send = list()
+    recv = list()
+    with open(name) as f:
+        lines = f.readlines()
+        for i in range(len(lines)//4):
+            s = lines[4*i].split()
+            s2 = lines[4*i+1].split()
+            s3 = lines[4*i+2].split()
+            s4 = lines[4*i+3].split()
+            tl.append(int(s[0])*1000)
+            send.append(int(s[1])+int(s2[1])+int(s3[1])+int(s4[1]))
+            recv.append(int(s[2])+int(s2[2])+int(s3[2])+int(s4[2]))
+
+    return tl,send,recv
 
 def calc_e2e_intra(node,option):
     lat = dict()
@@ -161,6 +179,9 @@ def calc_e2e_inter(node1,node2, option):
             time1 = node1["Publication_publish"][seq]["time"]
         except:
             continue
+        if time0 > time1:
+            print("Error: time0 > time1 at", seq)
+            continue
 
         try:
             time2 = node1["Publication_enqueueMessage"][seq]["time"] # time2-1: pub_queue
@@ -168,6 +189,9 @@ def calc_e2e_inter(node1,node2, option):
 
             time3 = node1["TransportTCP_write"][seq_e]["time"]
         except:
+            continue
+        if time1 > time2:
+            print("Error: time1 at ", seq, " > time2 at ", seq_e)
             continue
 
         try:
@@ -190,8 +214,12 @@ def calc_e2e_inter(node1,node2, option):
             time5 = node2["SubscriptionQueue_push"][seq_e]["time"]
             seq_p = node2["SubscriptionQueue_push"][seq_e]["seq"]
 
-            time6 = node2["SubscriptionQueue_call_before_callback"][seq_p]["time"]
+
+            time7 = node2["SubscriptionQueue_call_before_callback"][seq_p]["time"]
+            seq_c = node2["SubscriptionQueue_call_before_callback"][seq_p]["seq"]
             name = node2["SubscriptionQueue_call_before_callback"][seq_p]["name"]
+
+            time6 = node2["SubscriptionQueue_call_before_callback_2"][seq_c]["time"]
         except:
             continue
 
@@ -212,10 +240,12 @@ def calc_e2e_inter(node1,node2, option):
                 lat[name]["ROS: app - pub queue"] = list()
                 lat[name]["ROS: pub queue - send"] = list()
                 lat[name]["ROS: recv - sub queue"] = list()
+                lat[name]["ROS: sub queue - app"] = list()
 
                 timeline[name]["ROS: app - pub queue"] = list()
                 timeline[name]["ROS: pub queue - send"] = list()
                 timeline[name]["ROS: recv - sub queue"] = list()
+                timeline[name]["ROS: sub queue - app"] = list()
 
         lat[name]["pub queue"].append(time2 - time1)
         lat[name]["kernel"].append(time4 - time3)
@@ -226,15 +256,17 @@ def calc_e2e_inter(node1,node2, option):
         timeline[name]["sub queue"].append(time5)
 
         if not hasattr(option,"ros_detail") or not option.ros_detail:
-            lat[name]["ROS"].append(time6 - time0 - (time6 - time5) - (time4 - time3) - (time2 - time1))
+            lat[name]["ROS"].append(time7 - time0 - (time6 - time5) - (time4 - time3) - (time2 - time1))
         else:
             lat[name]["ROS: app - pub queue"].append(time1 - time0)
             lat[name]["ROS: pub queue - send"].append(time3 - time2)
             lat[name]["ROS: recv - sub queue"].append(time5 - time4)
+            lat[name]["ROS: sub queue - app"].append(time7 - time6)
 
             timeline[name]["ROS: app - pub queue"].append(time0)
             timeline[name]["ROS: pub queue - send"].append(time2)
             timeline[name]["ROS: recv - sub queue"].append(time4)
+            timeline[name]["ROS: sub queue - app"].append(time4)
 
     return lat,timeline
 
@@ -386,6 +418,9 @@ def show_timeline(args):
 
     fig, ax = plt.subplots(node_num, pickup_num, sharex="row", sharey="row",squeeze=False)
 
+    if args.nw != "":
+        tl,send,recv = collect_nw(args.nw)
+
     for i,(node_name, node_time) in enumerate(lat.items(), start=0):
         assert reduce(lambda x,y: x if len(x) == len(y) else False, node_time.values())
         try:
@@ -395,13 +430,34 @@ def show_timeline(args):
             print("error: demangler")
             node_name_demangle = ""
 
+        sample_num = len(list(node_time.values())[0])
         print()
         print(node_name, " (", node_name_demangle, ")")
-        print("num: ", len(list(node_time.values())[0]))
+        print("num: ", sample_num)
+
+        tl2 = []
+        if args.nw != "":
+            for t in tl:
+                tl2.append((t - min(tl))/(max(tl) - min(tl))*sample_num)
 
         for j,key in enumerate(args.pickup):
-            ax[i,j].plot(timeline[node_name][key], lat[node_name][key])
+            ax[i,j].plot(range(len(timeline[node_name][key])), lat[node_name][key])
             ax[i,j].set_title(key)
+            ax[i,j].set_xlabel("# messages")
+            if j == 0:
+                ax[i,j].set_ylabel("Time (ns)")
+            ax[i,j].zorder = 2
+            ax[i,j].patch.set_visible(False)
+            if args.nw != "":
+                ax2 = ax[i,j].twinx()
+                ax2.zorder = 1
+                ax2.plot(tl2,send,color="orange")
+                #ax2.plot(tl,recv,color="black")
+                if j == len(args.pickup) - 1:
+                    ax2.set_ylabel("Bandwidth (a.u.)")
+
+
+
 
     plt.show()
 
@@ -434,6 +490,7 @@ parser_timeline.add_argument("dst_node", metavar="<dst node>")
 parser_timeline.add_argument('--kernel', dest='pickup', action='append_const', const="kernel")
 parser_timeline.add_argument('--pubq', dest='pickup', action='append_const', const="pub queue")
 parser_timeline.add_argument('--subq', dest='pickup', action='append_const', const="sub queue")
+parser_timeline.add_argument('--nw', default="")
 parser_timeline.set_defaults(handler=show_timeline)
 
 args = parser.parse_args()
