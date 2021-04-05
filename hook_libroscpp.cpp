@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <bits/stdc++.h>
 #include <sstream>
+#include <set>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -36,6 +37,10 @@
 #undef private
 
 #define private public
+#include "ros/publication.h"
+#undef private
+
+#define private public
 #include "ros/publisher.h"
 #undef private
 
@@ -46,6 +51,12 @@
 #include "ros/ros.h"
 #include "ros/callback_queue.h"
 #include "ros/publication.h"
+#include "ros/subscriber_link.h"
+#include "ros/publisher_link.h"
+
+#define private public
+#include "ros/subscription.h"
+#undef private
 
 // Dirty trick!
 #define private public
@@ -73,9 +84,11 @@ enum class fun_type {
   bind,
 };
 
+boost::mutex publication_mutex;
 boost::mutex subscription_queue_push_mutex;
+boost::mutex subscription_set_mutex;
 
-uint32_t push_seq_table[0x1000];
+uint32_t push_seq_table[0x10000];
 
 struct _data {
   fun_type type;
@@ -150,7 +163,6 @@ extern "C" bool _ZN3ros11Publication14enqueueMessageERKNS_17SerializedMessageE(v
   auto m = reinterpret_cast<ros::SerializedMessage*>(q);
 
   uint32_t seq1 = *(uint32_t*)m->message_start;
-  //cout << "enq " << (uint32_t*)m->buf.get() << " " << pid << endl;
 
   bool res = ((enqueueMessage_type)orig)(p,q);
 
@@ -170,40 +182,62 @@ extern "C" bool _ZN3ros11Publication14enqueueMessageERKNS_17SerializedMessageE(v
 }
 
 using publish_type = bool (*)(void* ,void*);
-
 // ros::Publication::publish(ros::SerializedMessage&)
-extern "C" bool _ZN3ros11Publication7publishERNS_17SerializedMessageE(void *p, void *q) {
-  static void *orig = NULL;
-  if (orig == NULL) {
-    orig = dlsym(RTLD_NEXT, "_ZN3ros11Publication7publishERNS_17SerializedMessageE");
-  }
-  //static uint32_t seq = 0;
-
+extern "C" void _ZN3ros11Publication7publishERNS_17SerializedMessageE(void *p_, ros::SerializedMessage& m) {
+  struct _data data = {};
+  static uint32_t seq = 0;
   static pid_t pid = 0, tid = 0;
   if (pid == 0) {
     pid = getpid();
     tid = syscall(SYS_gettid);
   }
 
-  auto m = reinterpret_cast<ros::SerializedMessage*>(q);
+  auto p = reinterpret_cast<ros::Publication*>(p_);
 
-  struct _data data = {};
-  data.type = fun_type::Publication_publish;
-  cout << "push " << (uint32_t*)m->buf.get() << " " << data.pid << endl;
-  uint64_t seq1 = (uint64_t)m;
-  uint64_t seq2 = (uint64_t)m->buf.get();
+  {
+  if (m.message)
+    {
+        boost::mutex::scoped_lock lock(p->subscriber_links_mutex_);
+        V_SubscriberLink::const_iterator it = p->subscriber_links_.begin();
+        V_SubscriberLink::const_iterator end = p->subscriber_links_.end();
+        for (; it != end; ++it)
+        {
+          const SubscriberLinkPtr& sub = *it;
+          if (sub->isIntraprocess())
+          {
+                sub->enqueueMessage(m, false, true);
+          }
+        }
 
-  bool res = ((publish_type)orig)(p,q);
+        m.message.reset();
+    }
 
-  auto now = chrono::system_clock::now().time_since_epoch();
-  data.ns = std::chrono::duration_cast<chrono::nanoseconds>(now).count();
-  data.pid = pid;
-  data.tid = tid;
-  data.seq1 = seq1; //*(uint32_t*)m->message_start;
-  data.seq2 = seq2; //*(uint32_t*)m->message_start;
-  data_queue.push(data);
+    if (m.buf)
+    {
+        {
+          boost::mutex::scoped_lock lock(publication_mutex);
+          if (p->has_header_) {
+            data.seq1 = (uint64_t)&m;
+            *(uint32_t*)(m.buf.get() + 4) = seq++;
+            data.seq2 = seq;
+          }
+        }
+        boost::mutex::scoped_lock lock(p->publish_queue_mutex_);
+        p->publish_queue_.push_back(m);
+    }
+  }
 
-  return res;
+
+  if(p->has_header_) {
+    auto now = chrono::system_clock::now().time_since_epoch();
+    data.type = fun_type::Publication_publish;
+    data.ns = std::chrono::duration_cast<chrono::nanoseconds>(now).count();
+    data.pid = pid;
+    data.tid = tid;
+    data_queue.push(data);
+  }
+
+  return;
 }
 
 extern "C" TopicManagerPtr& _ZN3ros12TopicManager8instanceEv();
@@ -212,14 +246,10 @@ extern "C" void _ZNK3ros9Publisher7publishERKN5boost8functionIFNS_17SerializedMe
 {
   auto s = reinterpret_cast<Publisher*>(p);
 
-  static struct _data data = {};
-  static bool initialized = false;
-  if (!initialized) {
-    data.pid = getpid();
-    data.tid = syscall(SYS_gettid);
-    data.type = fun_type::Publisher_publish;
-    initialized = true;
-  }
+  struct _data data = {};
+  data.pid = getpid();
+  data.tid = syscall(SYS_gettid);
+  data.type = fun_type::Publisher_publish;
 
   // Inserted
   {
@@ -243,12 +273,11 @@ extern "C" void _ZNK3ros9Publisher7publishERKN5boost8functionIFNS_17SerializedMe
   PublicationPtr pp = _ZN3ros12TopicManager8instanceEv()->lookupPublicationWithoutLock(s->impl_->topic_);
   if (pp->hasSubscribers() || pp->isLatching())
   {
-    cout << "push0 " << &m << " " << data.tid << endl;
     
     _ZN3ros12TopicManager8instanceEv()->publish(s->impl_->topic_, serfunc, m);
 
-    data.seq1 = (uint64_t)&m; //*(uint32_t*)m.message_start;
-    data.seq2 = (uint64_t)&m; //*(uint32_t*)m.message_start;
+    data.seq1 = (uint64_t)&m;
+    //data.seq2 = (uint64_t)&m; //*(uint32_t*)m.message_start;
     data_queue.push(data);
   }
   else {
@@ -267,11 +296,9 @@ extern "C" void _ZNK3ros9Publisher7publishERKN5boost8functionIFNS_17SerializedMe
 extern "C"  CallbackInterface::CallResult _ZN3ros17SubscriptionQueue4callEv(void *p) {
   auto s = reinterpret_cast<SubscriptionQueue*>(p);
   auto now = chrono::system_clock::now().time_since_epoch();
-  static pid_t pid = 0, tid = 0;
-  if (pid == 0) {
-    pid = getpid();
-    tid = syscall(SYS_gettid);
-  }
+  pid_t pid = 0, tid = 0;
+  pid = getpid();
+  tid = syscall(SYS_gettid);
 
   boost::shared_ptr<SubscriptionQueue> self;
   boost::recursive_mutex::scoped_try_lock lock(s->callback_mutex_, boost::defer_lock);
@@ -317,6 +344,16 @@ extern "C"  CallbackInterface::CallResult _ZN3ros17SubscriptionQueue4callEv(void
     --(s->queue_size_);
   }
 
+  {
+    boost::mutex::scoped_lock lock(i.deserializer->mutex_);
+    ros::SerializedMessage m = i.deserializer->serialized_message_;
+    if (m.buf && !(i.deserializer->msg_) && !m.message && m.num_bytes > 100) {
+      boost::mutex::scoped_lock push_lock(subscription_set_mutex);
+      uint32_t seq1 = *(uint32_t*)(m.buf.get() + 4);
+      //*(uint32_t*)(m.buf.get() + 4) = push_seq_table[seq1 % 0x10000];
+    }
+  }
+
   VoidConstPtr msg = i.deserializer->deserialize();
 
   // msg can be null here if deserialization failed
@@ -341,16 +378,14 @@ extern "C"  CallbackInterface::CallResult _ZN3ros17SubscriptionQueue4callEv(void
       data.tid = tid;
       data.type = fun_type::SubscriptionQueue_call_before_callback;
 
-      data.seq1 = *(uint32_t*)msg.get();
-      //*(uint32_t*)msg.get() = push_seq_table[data.seq1 % 0x1000];
-
-      data.seq2 = push_seq_table[data.seq1 % 0x1000];
       data.name = i.helper->getTypeInfo().name();
 
       data_queue.push(data);
 
     }
+
     i.helper->call(params);
+
     // Measurement
     {
       struct _data data = {};
@@ -378,13 +413,6 @@ extern "C" void _ZN3ros17SubscriptionQueue4pushERKN5boost10shared_ptrINS_26Subsc
   auto s = reinterpret_cast<SubscriptionQueue*>(p);
 
   static uint32_t seq_push = 0;
-  static struct _data data = {};
-  static bool initialized = false;
-  if (!initialized) {
-    data.type = fun_type::SubscriptionQueue_push;
-    data.pid = getpid();
-    data.tid = syscall(SYS_gettid);
-  }
 
   boost::mutex::scoped_lock lock(s->queue_mutex_);
 
@@ -422,16 +450,15 @@ extern "C" void _ZN3ros17SubscriptionQueue4pushERKN5boost10shared_ptrINS_26Subsc
   i.tracked_object = tracked_object;
   i.nonconst_need_copy = nonconst_need_copy;
   i.receipt_time = receipt_time;
-  s->queue_.push_back(i);
-  ++(s->queue_size_);
 
   // Measurement
   {
     auto now = chrono::system_clock::now().time_since_epoch();
-    ros::SerializedMessage* m = &(deserializer->serialized_message_);
 
-    cout << "push1 " << m << " " << data.pid << endl;
-    //VoidConstPtr msg = deserializer->deserialize();
+    struct _data data = {};
+    data.type = fun_type::SubscriptionQueue_push;
+    data.pid = getpid();
+    data.tid = syscall(SYS_gettid);
 
     {
       boost::mutex::scoped_lock push_lock(subscription_queue_push_mutex);
@@ -439,18 +466,114 @@ extern "C" void _ZN3ros17SubscriptionQueue4pushERKN5boost10shared_ptrINS_26Subsc
       seq_push++;
     }
 
-    data.ns = std::chrono::duration_cast<chrono::nanoseconds>(now).count();
-    //data.seq1 = *(uint32_t*)m->message_start;
-    //data.seq1 = *(uint32_t*)msg.get();
-    //
-    
-    //*(uint32_t*)m->message_start = data.seq2;
-    //*(uint32_t*)msg.get() = data.seq2;
-    data_queue.push(data);
+    { 
+      boost::mutex::scoped_lock lock(i.deserializer->mutex_);
+      ros::SerializedMessage m = deserializer->serialized_message_;
+      if (m.buf && !(deserializer->msg_) && !m.message && m.num_bytes > 100 ) { 
+        boost::mutex::scoped_lock push_lock(subscription_set_mutex);
+        data.seq1 = *(uint32_t*)(m.buf.get() + 4);
+        *(uint32_t*)(m.buf.get() + 4) = data.seq1;
 
-    push_seq_table[data.seq2 % 0x1000] = data.seq1;
+        
+        push_seq_table[data.seq2 % 0x10000] = data.seq1;
+
+        data.ns = std::chrono::duration_cast<chrono::nanoseconds>(now).count();
+        data_queue.push(data);
+      }
+    }
   }
+
+  s->queue_.push_back(i);
+  ++(s->queue_size_);
 }
+
+
+/*
+extern "C" uint32_t _ZN3ros12Subscription13handleMessageERKNS_17SerializedMessageEbbRKN5boost10shared_ptrISt3mapINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESC_St4lessISC_ESaISt4pairIKSC_SC_EEEEERKNS5_INS_13PublisherLinkEEE
+//uint32_t Subscription::handleMessage
+(Subscription* s, const SerializedMessage& m, bool ser, bool nocopy, const boost::shared_ptr<M_string>& connection_header, const PublisherLinkPtr& link)
+{
+  boost::mutex::scoped_lock lock(s->callbacks_mutex_);
+
+  uint32_t drops = 0;
+
+  // Cache the deserializers by type info.  If all the subscriptions are the same type this has the same performance as before.  If
+  // there are subscriptions with different C++ type (but same ROS message type), this now works correctly rather than passing
+  // garbage to the messages with different C++ types than the first one.
+  s->cached_deserializers_.clear();
+
+  ros::Time receipt_time = ros::Time::now();
+
+  for (Subscription::V_CallbackInfo::iterator cb = s->callbacks_.begin();
+         cb != s->callbacks_.end(); ++cb)
+  {
+     const Subscription::CallbackInfoPtr& info = *cb;
+
+    //ROS_ASSERT(info->callback_queue_);
+
+    const std::type_info* ti = &info->helper_->getTypeInfo();
+    //cout << ti->name() << endl;
+
+    if ((nocopy && m.type_info && *ti == *m.type_info) || (ser && (!m.type_info || *ti != *m.type_info)))
+        {
+              MessageDeserializerPtr deserializer;
+
+      Subscription::V_TypeAndDeserializer::iterator des_it = s->cached_deserializers_.begin();
+      Subscription::V_TypeAndDeserializer::iterator des_end = s->cached_deserializers_.end();
+      for (; des_it != des_end; ++des_it)
+      {
+        if (*des_it->first == *ti)
+        {
+          deserializer = des_it->second;
+          break;
+        }
+      }
+
+      if (!deserializer)
+      {
+          deserializer = boost::make_shared<MessageDeserializer>(info->helper_, m, connection_header);
+          s->cached_deserializers_.push_back(std::make_pair(ti, deserializer));
+      }
+
+      bool was_full = false;
+      bool nonconst_need_copy = false;
+      if (s->callbacks_.size() > 1)
+      {
+        nonconst_need_copy = true;
+      }
+
+      info->subscription_queue_->push(info->helper_, deserializer, info->has_tracked_object_, info->tracked_object_, nonconst_need_copy, receipt_time, &was_full);
+
+      if (was_full)
+            {
+                ++drops; } 
+      else
+      {
+         info->callback_queue_->addCallback(info->subscription_queue_, (uint64_t)info.get());
+         }
+       }
+     }
+
+  // measure statistics
+    //s->statistics_.callback(connection_header, s->name_, link->getCallerID(), m, link->getStats().bytes_received_, receipt_time, drops > 0, link->getConnectionID());
+
+  // If this link is latched, store off the message so we can immediately pass it to new subscribers later
+    if (link->isLatched())
+      {
+          Subscription::LatchInfo li;
+          li.connection_header = connection_header;
+          li.link = link;
+          li.message = m;
+          li.receipt_time = receipt_time;
+          s->latched_messages_[link] = li;
+      }
+
+    s->cached_deserializers_.clear();
+
+  return drops;
+}
+*/
+
 /*
 using send_type = ssize_t (*)(int, const void *, size_t, int);
 
@@ -485,14 +608,10 @@ extern "C" ssize_t write(int fd, const void *buf, size_t count) {
 extern "C" int32_t _ZN3ros12TransportTCP5writeEPhj(void* p, uint8_t* buffer, uint32_t size) {
   auto s = reinterpret_cast<TransportTCP*>(p);
 
-  static struct _data data = {};
-  static bool initialized = false;
-  if (!initialized) {
+  struct _data data = {};
     data.pid = getpid();
     data.tid = syscall(SYS_gettid);
     data.type = fun_type::TransportTCP_write;
-    initialized = true;
-  }
 
 
   {
@@ -648,14 +767,10 @@ extern "C" int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
     orig = dlsym(RTLD_NEXT, "accept");
   }
 
-  static struct _data data = {};
-  static bool initialized = false;
-  if (!initialized) {
+  struct _data data = {};
     data.pid = getpid();
     data.tid = syscall(SYS_gettid);
     data.type = fun_type::accept;
-    initialized = true;
-  }
 
   int res = ((accept_type)orig)(sockfd, addr, addrlen);
 
