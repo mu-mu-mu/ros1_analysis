@@ -25,20 +25,22 @@ plt.rcParams['axes.linewidth'] = 1.0
 
 
 func_types =[
-  "Publication_publish",
-  "Publisher_publish",
-  "Publication_enqueueMessage",
+  "Publication_publish", # 0
+  "Publisher_publish", # 1
+  "Publication_enqueueMessage", 
 
-  "SubscriptionQueue_push",
-  "SubscriptionQueue_call_before_callback",
-  "SubscriptionQueue_call_after_callback",
+  "SubscriptionQueue_push", # 3
+  "SubscriptionQueue_call_before_callback", # 4
+  "SubscriptionQueue_call_after_callback", # 5
 
-  "TransportTCP_write",
-  "TransportTCP_read",
+  "TransportTCP_write", # 6
+  "TransportTCP_read", # 7
 
   "accept",
   "connect",
   "bind",
+
+  "SubscriptionQueue_call_before_callback_2",
   ]
 
 # 2 1613531009784539434 11345 11361 2 2
@@ -46,6 +48,7 @@ def collect(name):
     node = dict()
     node["Publication_publish"] = dict()
     node["Publisher_publish"] = dict()
+    node["Publisher_publish"]["time"] = list()
     node["Publication_enqueueMessage"] = dict()
     node["SubscriptionQueue_push"] = dict()
     node["SubscriptionQueue_call_before_callback"] = dict()
@@ -54,6 +57,7 @@ def collect(name):
     node["TransportTCP_read"] = dict()
     node["socket"] = dict()
     node["port"] = list()
+    node["SubscriptionQueue_call_before_callback_2"] = dict()
     
     with open(name) as f:
         for _l in f.readlines():
@@ -70,10 +74,12 @@ def collect(name):
             if f_type == "Publisher_publish":
                 node["Publisher_publish"][seq2] = dict()
                 node["Publisher_publish"][seq2]["time"] = time
+                node["Publisher_publish"]["time"].append((time,tid))
 
             elif f_type == "Publication_publish":
                 node["Publication_publish"][seq2] = dict()
                 node["Publication_publish"][seq2]["time"] = time
+                node["Publication_publish"][seq2]["tid"] = tid
 
             elif f_type == "Publication_enqueueMessage":
                 node["Publication_enqueueMessage"][seq1] = dict()
@@ -123,42 +129,121 @@ def collect(name):
                 node["socket"][seq2]["from"] = seq1
                 node["port"].append(seq1)
 
+            elif f_type == "SubscriptionQueue_call_before_callback_2":
+                node["SubscriptionQueue_call_before_callback_2"][seq1] = dict()
+                node["SubscriptionQueue_call_before_callback_2"][seq1]["time"] = time 
+
             else:
                 print("Error")
     return node
 
 def calc_e2e_intra(node,option):
     lat = dict()
+    timeline = dict()
 
-    for seq, t in node["SubscriptionQueue_push"].items():
+    for seq, t in node["Publication_publish"].items():
         time1 = t["time"]
-        seq_p = t["seq"]
+        tid1 = t["tid"]
 
         try:
-            time2 = node["SubscriptionQueue_call_before_callback"][seq_p]["time"]
-            name  = node["SubscriptionQueue_call_before_callback"][seq_p]["name"]
+            time0 = 0
+            for t,tid in node["Publisher_publish"]["time"]:
+                if tid != tid1:
+                    continue
+                if time0 < t < time1:
+                    time0 = t
+        except:
+            continue
+        if time0 == 0:
+            print("Error: time0")
+            continue
+
+        try:
+            time2 = node["Publication_enqueueMessage"][seq]["time"] # time2-1: pub_queue
+            seq_e = node["Publication_enqueueMessage"][seq]["seq"] # time2-1: pub_queue
+
+            time3 = node["SubscriptionQueue_push"][seq_e]["time"]
+            seq_p = node["SubscriptionQueue_push"][seq_e]["seq"]
         except:
             continue
 
-        if seq in node["TransportTCP_read"].keys():
+        if time2 > time3:
+            print("Error: time2 > time3")
+
+        try:
+            time5 = node["SubscriptionQueue_call_before_callback"][seq_p]["time"]
+            name = node["SubscriptionQueue_call_before_callback"][seq_p]["name"]
+
+            time4 = node["SubscriptionQueue_call_before_callback_2"][seq_p]["time"]
+        except:
             continue
+
+        if time4 > time5:
+            print("Error: time5 > time6")
 
         if not name in lat.keys():
             lat[name] = dict()
+            lat[name]["pub queue"] = list()
             lat[name]["sub queue"] = list()
 
-        lat[name]["sub queue"].append(time2 - time1)
-    return lat
+            timeline[name] = dict()
+            timeline[name]["pub queue"] = list()
+            timeline[name]["sub queue"] = list()
+
+            if not hasattr(option,"ros_detail") or not option.ros_detail:
+                lat[name]["ROS"] = list()
+            else:
+                lat[name]["ROS: app - pub queue"] = list()
+                lat[name]["ROS: pub queue - sub queue"] = list()
+                lat[name]["ROS: sub queue - app"] = list()
+
+                timeline[name]["ROS: app - pub queue"] = list()
+                timeline[name]["ROS: pub queue - sub queue"] = list()
+                timeline[name]["ROS: sub queue - app"] = list()
+
+        lat[name]["pub queue"].append(time2 - time1)
+        lat[name]["sub queue"].append(time4 - time3)
+
+        timeline[name]["pub queue"].append(time1)
+        timeline[name]["sub queue"].append(time3)
+
+        if not hasattr(option,"ros_detail") or not option.ros_detail:
+            lat[name]["ROS"].append(time5 - time0 - (time4 - time3) - (time2 - time1))
+        else:
+            lat[name]["ROS: app - pub queue"].append(time1 - time0)
+            lat[name]["ROS: pub queue - sub queue"].append(time3 - time2)
+            lat[name]["ROS: sub queue - app"].append(time5 - time4)
+
+            timeline[name]["ROS: app - pub queue"].append(time0)
+            timeline[name]["ROS: pub queue - sub queue"].append(time2)
+            timeline[name]["ROS: sub queue - app"].append(time4)
+
+    return lat,timeline
 
 def calc_e2e_inter(node1,node2, option):
     lat = dict()
     timeline = dict()
 
-    for seq, t in node1["Publisher_publish"].items():
-        time0 = t["time"]
+    
+    # for seq, t in node1["Publisher_publish"].items():
+    #     time0 = t["time"]
+
+    #     try:
+    #         time1 = node1["Publication_publish"][seq]["time"]
+    #     except:
+    #         continue
+
+    for seq, t in node1["Publication_publish"].items():
+        time1 = t["time"]
+        tid1 = t["tid"]
 
         try:
-            time1 = node1["Publication_publish"][seq]["time"]
+            time0 = 0
+            for t,tid in node1["Publisher_publish"]["time"]:
+                if tid != tid1:
+                    continue
+                if time0 < t < time1:
+                    time0 = t
         except:
             continue
 
@@ -169,6 +254,9 @@ def calc_e2e_inter(node1,node2, option):
             time3 = node1["TransportTCP_write"][seq_e]["time"]
         except:
             continue
+
+        if time2 > time3:
+            print("Error: time2 > time3")
 
         try:
             node2["TransportTCP_read"][seq_e]
@@ -190,10 +278,15 @@ def calc_e2e_inter(node1,node2, option):
             time5 = node2["SubscriptionQueue_push"][seq_e]["time"]
             seq_p = node2["SubscriptionQueue_push"][seq_e]["seq"]
 
-            time6 = node2["SubscriptionQueue_call_before_callback"][seq_p]["time"]
+            time7 = node2["SubscriptionQueue_call_before_callback"][seq_p]["time"]
             name = node2["SubscriptionQueue_call_before_callback"][seq_p]["name"]
+
+            time6 = node2["SubscriptionQueue_call_before_callback_2"][seq_p]["time"]
         except:
             continue
+
+        if time5 > time6:
+            print("Error: time5 > time6")
 
         if not name in lat.keys():
             lat[name] = dict()
@@ -212,10 +305,12 @@ def calc_e2e_inter(node1,node2, option):
                 lat[name]["ROS: app - pub queue"] = list()
                 lat[name]["ROS: pub queue - send"] = list()
                 lat[name]["ROS: recv - sub queue"] = list()
+                lat[name]["ROS: sub queue - app"] = list()
 
                 timeline[name]["ROS: app - pub queue"] = list()
                 timeline[name]["ROS: pub queue - send"] = list()
                 timeline[name]["ROS: recv - sub queue"] = list()
+                timeline[name]["ROS: sub queue - app"] = list()
 
         lat[name]["pub queue"].append(time2 - time1)
         lat[name]["kernel"].append(time4 - time3)
@@ -226,15 +321,17 @@ def calc_e2e_inter(node1,node2, option):
         timeline[name]["sub queue"].append(time5)
 
         if not hasattr(option,"ros_detail") or not option.ros_detail:
-            lat[name]["ROS"].append(time6 - time0 - (time6 - time5) - (time4 - time3) - (time2 - time1))
+            lat[name]["ROS"].append(time7 - time0 - (time6 - time5) - (time4 - time3) - (time2 - time1))
         else:
             lat[name]["ROS: app - pub queue"].append(time1 - time0)
             lat[name]["ROS: pub queue - send"].append(time3 - time2)
             lat[name]["ROS: recv - sub queue"].append(time5 - time4)
+            lat[name]["ROS: sub queue - app"].append(time7 - time6)
 
             timeline[name]["ROS: app - pub queue"].append(time0)
             timeline[name]["ROS: pub queue - send"].append(time2)
             timeline[name]["ROS: recv - sub queue"].append(time4)
+            timeline[name]["ROS: sub queue - app"].append(time6)
 
     return lat,timeline
 
@@ -281,15 +378,19 @@ def show_inter(args):
 def show_intra(args):
     n = collect(args.node)
 
-    lat = calc_e2e_intra(n,args)
-
-    fig = plt.figure()
+    lat,timeline = calc_e2e_intra(n, args)
 
     node_num = len(lat)
-
     if node_num == 0:
         print("None")
         sys.exit(0)
+
+    time_num = len(list(lat.values())[0])
+
+    if args.concat:
+        fig, ax = plt.subplots(node_num, time_num, sharex="row", sharey="row",squeeze=False)
+    else:
+        fig, ax = plt.subplots(node_num, 1, sharex="row", sharey="row",squeeze=False)
 
     for i,(node_name, node_time) in enumerate(lat.items(), start=0):
         assert reduce(lambda x,y: x if len(x) == len(y) else False, node_time.values())
@@ -303,16 +404,50 @@ def show_intra(args):
         print(node_name)
         print("num: ", len(list(node_time.values())[0]))
 
-        time_num = len(node_time)
-        for j,(lat_name, time)  in enumerate(node_time.items(), start=1):
+        for j,(lat_name, time)  in enumerate(node_time.items()):
             if args.concat:
-                ax = fig.add_subplot(node_num, time_num, time_num*i+j)
+                ax[i,j].hist(time, bins =50, histtype = 'bar')
+                ax[i,j].set_title(lat_name)
             else:
-                ax = fig.add_subplot(node_num,1,1)
-            ax.hist(time, bins =50, histtype = 'bar', label = lat_name)
-            ax.legend(loc="best")
+                ax[i,0].hist(time, bins =50, histtype = 'bar', label = lat_name)
+                ax[i,0].legend(loc="best")
 
     plt.show()
+# def show_intra(args):
+#     n = collect(args.node)
+# 
+#     lat,timeline = calc_e2e_intra(n,args)
+# 
+#     fig = plt.figure()
+# 
+#     node_num = len(lat)
+# 
+#     if node_num == 0:
+#         print("None")
+#         sys.exit(0)
+# 
+#     for i,(node_name, node_time) in enumerate(lat.items(), start=0):
+#         assert reduce(lambda x,y: x if len(x) == len(y) else False, node_time.values())
+#         try:
+#             demangler_out = subprocess.run(["./demangler", node_name], capture_output=True)
+#             node_name = demangler_out.stdout.decode('utf-8')
+#         except:
+#             print("error: demangler")
+# 
+#         print()
+#         print(node_name)
+#         print("num: ", len(list(node_time.values())[0]))
+# 
+#         time_num = len(node_time)
+#         for j,(lat_name, time)  in enumerate(node_time.items(), start=1):
+#             if args.concat:
+#                 ax = fig.add_subplot(node_num, time_num, time_num*i+j)
+#             else:
+#                 ax = fig.add_subplot(node_num,1,1)
+#             ax.hist(time, bins =50, histtype = 'bar', label = lat_name)
+#             ax.legend(loc="best")
+# 
+#     plt.show()
 
 def show_stack(args):
     latencies = list()
