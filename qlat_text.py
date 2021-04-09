@@ -19,12 +19,14 @@ BPF_PERF_OUTPUT(data_pid);
 struct data_init {
     u32 tgid;
 };
+
 BPF_PERF_OUTPUT(data_init);
 
 struct delta {
     u32 pid;
     u32 tgid;
     u64 ns;
+    u32 rq;
 };
 
 BPF_PERF_OUTPUT(data_delta);
@@ -38,6 +40,12 @@ BPF_HASH(ros_pids, u32, u32);
 BPF_HASH(start, u32);
 
 BPF_HASH(bytes, u64, u64);
+
+BPF_HASH(rsock_cpu, u64, u64);
+BPF_HASH(rsock_cpu_ros, u64, u64);
+
+BPF_HASH(ssock_cpu, u64, u64);
+BPF_HASH(ssock_cpu_ros, u64, u64);
 
 ////////////
 
@@ -150,6 +158,7 @@ int trace_run(struct pt_regs *ctx, struct task_struct *prev)
     data.pid = pid;
     data.tgid = tgid;
     data.ns = bpf_ktime_get_ns() - *tsp;
+    data.rq = bpf_get_smp_processor_id();
 
     data_delta.perf_submit(ctx, &data, sizeof(data));
 
@@ -170,8 +179,19 @@ int trace_tcp_sendmsg(struct pt_regs *ctx, struct sock *sk,
         u64 send = 0;
         bytes.increment(send, size);
     }
-    // else drop
-    return 0;
+
+    int key = bpf_get_smp_processor_id();
+    ssock_cpu.increment(key, 1);
+
+    u32 tgid = bpf_get_current_pid_tgid() >> 32;
+    u32 *is_ros_app = ros_pids.lookup(&tgid);
+    if (is_ros_app == NULL) {
+        return 0;
+    }
+    else {
+        ssock_cpu_ros.increment(key, 1);
+        return 0;
+    }
 }
 
 int trace_tcp_cleanup_rbuf(struct pt_regs *ctx, struct sock *sk, int copied)
@@ -187,7 +207,18 @@ int trace_tcp_cleanup_rbuf(struct pt_regs *ctx, struct sock *sk, int copied)
         u64 recv = 1;
         bytes.increment(recv, copied);
     }
-    // else drop
-    return 0;
+
+    int key = bpf_get_smp_processor_id();
+    rsock_cpu.increment(key, 1);
+
+    u32 tgid = bpf_get_current_pid_tgid() >> 32;
+    u32 *is_ros_app = ros_pids.lookup(&tgid);
+    if (is_ros_app == NULL) {
+        return 0;
+    }
+    else {
+        rsock_cpu_ros.increment(key, 1);
+        return 0;
+    }
 }
 """

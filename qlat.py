@@ -11,11 +11,28 @@ ros_app_tgid = list()
 ros_app_pid_tgid = dict()
 ros_app_pids_delta = dict()
 
+ros_cpu = dict()
+
 bpf_get_tid = BPF(text=bpf_text_get_tid)
 
 nw = dict()
 nw["send"] = list()
 nw["recv"] = list()
+
+nwq = dict()
+nwq["send"] = list()
+for i in range(16):
+    nwq["send"].append(0)
+nwq["recv"] = list()
+for i in range(16):
+    nwq["recv"].append(0)
+nwq["send_ros"] = list()
+for i in range(16):
+    nwq["send_ros"].append(0)
+nwq["recv_ros"] = list()
+for i in range(16):
+    nwq["recv_ros"].append(0)
+
 
 # def get_tid_attach(tgid):
 #     # Publication::enqueueMessage(ros::SerializedMessage const&)
@@ -93,7 +110,12 @@ def print_delta(cpu, data, size):
     if not event.pid in ros_app_pids_delta.keys():
         ros_app_pids_delta[event.pid] = list()
         ros_app_pid_tgid[event.pid] = event.tgid
+        ros_cpu[event.pid] = list()
+        for i in range(12):
+            ros_cpu[event.pid].append(0)
+
     ros_app_pids_delta[event.pid].append(event.ns)
+    ros_cpu[event.pid][event.rq] += 1
 
 
 bpf_get_tid["data_pid"].open_perf_buffer(print_get_pid)
@@ -123,6 +145,28 @@ while 1:
 
         bpf_get_tid["bytes"].clear()
 
+        ######
+
+        k = bpf_get_tid["rsock_cpu"].items()
+        bpf_get_tid["rsock_cpu"].clear()
+        for x,y in k:
+            nwq["recv"][x.value] += y.value
+
+        k = bpf_get_tid["ssock_cpu"].items()
+        bpf_get_tid["ssock_cpu"].clear()
+        for x,y in k:
+            nwq["send"][x.value] += y.value
+
+        k = bpf_get_tid["rsock_cpu_ros"].items()
+        bpf_get_tid["rsock_cpu_ros"].clear()
+        for x,y in k:
+            nwq["recv_ros"][x.value] += y.value
+
+        k = bpf_get_tid["ssock_cpu_ros"].items()
+        bpf_get_tid["ssock_cpu_ros"].clear()
+        for x,y in k:
+            nwq["send_ros"][x.value] += y.value
+
     except KeyboardInterrupt:
         for pid, vals in ros_app_pids_delta.items():
             with open("data/qlat" +str(ros_app_pid_tgid[pid]) + "-" + str(pid) + ".txt", "w") as f:
@@ -133,4 +177,10 @@ while 1:
                 t,ps = nw["send"][i]
                 t,pr = nw["recv"][i]
                 f.write(str(t) + " " + str(ps) + " " + str(pr)+ "\n")
+        for i,j in nwq.items():
+            print(i,j)
+        print()
+        for i,j in ros_cpu.items():
+            print(i,j)
+
         exit()
