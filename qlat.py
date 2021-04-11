@@ -21,17 +21,20 @@ nw["recv"] = list()
 
 nwq = dict()
 nwq["send"] = list()
-for i in range(16):
-    nwq["send"].append(0)
 nwq["recv"] = list()
-for i in range(16):
-    nwq["recv"].append(0)
 nwq["send_ros"] = list()
-for i in range(16):
-    nwq["send_ros"].append(0)
 nwq["recv_ros"] = list()
-for i in range(16):
-    nwq["recv_ros"].append(0)
+# for i in range(12):
+#     nwq["send"].append(0)
+# nwq["recv"] = list()
+# for i in range(12):
+#     nwq["recv"].append(0)
+# nwq["send_ros"] = list()
+# for i in range(12):
+#     nwq["send_ros"].append(0)
+# nwq["recv_ros"] = list()
+# for i in range(12):
+#     nwq["recv_ros"].append(0)
 
 
 # def get_tid_attach(tgid):
@@ -111,11 +114,11 @@ def print_delta(cpu, data, size):
         ros_app_pids_delta[event.pid] = list()
         ros_app_pid_tgid[event.pid] = event.tgid
         ros_cpu[event.pid] = list()
-        for i in range(12):
-            ros_cpu[event.pid].append(0)
+        # for i in range(12):
+        #     ros_cpu[event.pid].append(list())
 
     ros_app_pids_delta[event.pid].append(event.ns)
-    ros_cpu[event.pid][event.rq] += 1
+    ros_cpu[event.pid].append((event.rq,event.now))
 
 
 bpf_get_tid["data_pid"].open_perf_buffer(print_get_pid)
@@ -147,40 +150,64 @@ while 1:
 
         ######
 
+        t = int(time()*1000000)
         k = bpf_get_tid["rsock_cpu"].items()
         bpf_get_tid["rsock_cpu"].clear()
         for x,y in k:
-            nwq["recv"][x.value] += y.value
+            nwq["recv"].append((x.value, y.value, t))
 
+        t = int(time()*1000000)
         k = bpf_get_tid["ssock_cpu"].items()
         bpf_get_tid["ssock_cpu"].clear()
         for x,y in k:
-            nwq["send"][x.value] += y.value
+            nwq["send"].append((x.value, y.value, t))
 
+        t = int(time()*1000000)
         k = bpf_get_tid["rsock_cpu_ros"].items()
         bpf_get_tid["rsock_cpu_ros"].clear()
         for x,y in k:
-            nwq["recv_ros"][x.value] += y.value
+            nwq["recv_ros"].append((x.value, y.value, t))
 
+        t = int(time()*1000000)
         k = bpf_get_tid["ssock_cpu_ros"].items()
         bpf_get_tid["ssock_cpu_ros"].clear()
         for x,y in k:
-            nwq["send_ros"][x.value] += y.value
+            nwq["send_ros"].append((x.value, y.value, t))
+
+        # k = bpf_get_tid["ssock_cpu_ros"].items()
+        # bpf_get_tid["ssock_cpu_ros"].clear()
+        # for x,y in k:
+        #     nwq["send_ros"][x.value] += y.value
 
     except KeyboardInterrupt:
         for pid, vals in ros_app_pids_delta.items():
             with open("data/qlat" +str(ros_app_pid_tgid[pid]) + "-" + str(pid) + ".txt", "w") as f:
                 f.write("\n".join(map(lambda x: "Q " + str(x), vals)))
+
         tgids = str(min(ros_app_tgid)) + "-" + str(max(ros_app_tgid))
         with open("data/nw"+tgids,"w") as f:
             for i in range(len(nw["send"])):
                 t,ps = nw["send"][i]
                 t,pr = nw["recv"][i]
                 f.write(str(t) + " " + str(ps) + " " + str(pr)+ "\n")
-        for i,j in nwq.items():
-            print(i,j)
-        print()
-        for i,j in ros_cpu.items():
-            print(i,j)
+
+        for pid, vals in ros_cpu.items():
+            with open("data/rq" +str(ros_app_pid_tgid[pid]) + "-" + str(pid) + ".txt", "w") as f:
+                for i, t in vals:
+                    f.write("Q " + str(i) + " " + str(t) + "\n")
+
+        for name, vals in nwq.items():
+            with open("data/" + name + ".txt", "w") as f:
+                for i, b, t in vals:
+                    f.write("Q " + str(i) + " " + str(b) + " " + str(t) + "\n")
+
+        tgids = str(min(ros_app_tgid)) + "-" + str(max(ros_app_tgid))
+        with open("data/queue_info","w") as f:
+            for i,j in nwq.items():
+                f.write(str(i) + " ")
+                for k in j:
+                    f.write(str(k) + " ")
+                f.write("\n")
+            f.write("\n")
 
         exit()

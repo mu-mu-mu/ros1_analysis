@@ -39,6 +39,10 @@ void Node1::timerCallback(const ros::TimerEvent &) {
 
 int main(int argc, char **argv) {
   ros::init(argc, argv, "node1");
+
+  usleep(60 * 1000 * 1000); // 10ms
+
+
   Node1 node1;
   ros::spin();
   return 0;

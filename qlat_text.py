@@ -26,6 +26,7 @@ struct delta {
     u32 pid;
     u32 tgid;
     u64 ns;
+    u64 now;
     u32 rq;
 };
 
@@ -158,6 +159,7 @@ int trace_run(struct pt_regs *ctx, struct task_struct *prev)
     data.pid = pid;
     data.tgid = tgid;
     data.ns = bpf_ktime_get_ns() - *tsp;
+    data.now = bpf_ktime_get_ns();
     data.rq = bpf_get_smp_processor_id();
 
     data_delta.perf_submit(ctx, &data, sizeof(data));
