@@ -98,8 +98,8 @@ def collect(name):
                 node["SubscriptionQueue_call_before_callback"][seq1]["name"] = name 
 
             elif f_type == "SubscriptionQueue_call_after_callback":
-                node["SubscriptionQueue_call_after_callback"][seq1] = dict()
-                node["SubscriptionQueue_call_after_callback"][seq1]["time"] = time 
+                node["SubscriptionQueue_call_after_callback"][seq2] = dict()
+                node["SubscriptionQueue_call_after_callback"][seq2]["time"] = time 
 
             elif f_type == "TransportTCP_write":
                 node["TransportTCP_write"][seq1] = dict()

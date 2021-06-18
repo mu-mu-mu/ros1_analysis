@@ -402,6 +402,13 @@ extern "C"  CallbackInterface::CallResult _ZN3ros17SubscriptionQueue4callEv(void
       boost::mutex::scoped_lock push_lock(subscription_set_mutex);
       // uint32_t seq1 = *(uint32_t*)(m.buf.get() + 4);
       //*(uint32_t*)(m.buf.get() + 4) = push_seq_table[seq1 % 0x10000];
+
+      /*
+      string filename = string(getenv("HOME")) + "/.ros/pl_dir/submsg_" + to_string(pid) + ".log";
+      ofstream f0(filename, ios::app);
+      f0 << s->topic_ << " " << i.helper->getTypeInfo().name() << endl;
+      f0.close();
+      */
     }
   }
 
@@ -457,8 +464,8 @@ extern "C"  CallbackInterface::CallResult _ZN3ros17SubscriptionQueue4callEv(void
       data.pid = pid;
       data.tid = tid;
       data.type = fun_type::SubscriptionQueue_call_after_callback;
-      data.seq1 = *(uint32_t*)msg.get();
-      data.seq2 = 0;
+      data.seq1 = data_seq;
+      data.seq2 = data_original;
 
       data_queue.push(data);
     }
@@ -750,13 +757,9 @@ extern "C" int32_t _ZN3ros12TransportTCP4readEPhj(void *p, uint8_t* buffer, uint
   auto s = reinterpret_cast<TransportTCP*>(p);
 
   static struct _data data = {};
-  static bool initialized = false;
-  if (!initialized) {
     data.pid = getpid();
     data.tid = syscall(SYS_gettid);
     data.type = fun_type::TransportTCP_read;
-    initialized = true;
-  }
 
 
   {

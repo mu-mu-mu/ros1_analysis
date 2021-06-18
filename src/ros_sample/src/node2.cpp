@@ -22,6 +22,8 @@ Node2::Node2() : nh_("~") {
 
 
 void Node2::callback(const ros_sample::nulldata::ConstPtr &input_msg) {
+  ros::Duration d = ros::Time::now() - input_msg->timer;
+  std::cout << d.sec <<"  " << d.nsec << std::endl;
 
   static int count = 0;
   if(count == 0x1000) {
